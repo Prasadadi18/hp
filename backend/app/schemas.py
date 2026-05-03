@@ -134,3 +134,41 @@ class SimulationEvent(BaseModel):
     event: NetworkEvent
     prediction: PredictionResult
     pipeline_stages: List[PipelineStageResult] = []
+
+
+# ── Admin Dashboard schemas ───────────────────────────────────────────────────
+class AdminAlert(BaseModel):
+    """A pending threat alert awaiting admin approval."""
+    alert_id: str
+    event_id: str
+    user_id: str
+    threat_score: float
+    threat_action: str
+    xgb_score: float = 0.0
+    lgb_score: float = 0.0
+    ensemble_score: float = 0.0
+    threshold: float = 0.5
+    event_data: Dict[str, Any] = {}
+    pipeline_stages: List[Dict[str, Any]] = []
+    source_geo: Dict[str, Any] = {}
+    destination_geo: Dict[str, Any] = {}
+    total_latency_ms: float = 0.0
+    status: str = "pending"  # pending | approved | rejected
+    created_at: str = ""
+    resolved_at: Optional[str] = None
+    admin_notes: str = ""
+    rotation_result: Optional[Dict[str, Any]] = None
+
+
+class ApprovalRequest(BaseModel):
+    """Request body for approving or rejecting an alert."""
+    admin_notes: str = ""
+
+
+class ApprovalResponse(BaseModel):
+    """Response after an admin approval/rejection action."""
+    success: bool
+    alert_id: str
+    action: str  # approved | rejected
+    rotation_result: Optional[Dict[str, Any]] = None
+    message: str = ""

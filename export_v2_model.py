@@ -28,12 +28,12 @@ warnings.filterwarnings('ignore')
 
 # ── CONFIG ──────────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join("C:\\Users\\Lenovo\\projects\\hpe\\realistic_logs_v2")
+DATA_DIR = os.path.join(BASE_DIR, "dataset")
 OUTPUT_DIR = os.path.join(BASE_DIR, "model_output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-LOGS_FILE = os.path.join(DATA_DIR, 'realistic_network_logs.csv')
-PROFILES_FILE = os.path.join(DATA_DIR, 'realistic_user_profiles.csv')
+LOGS_FILE = os.path.join(DATA_DIR, 'updated_realistic_network_logs.csv')
+PROFILES_FILE = os.path.join(DATA_DIR, 'updated_realistic_user_profiles.csv')
 
 def main():
     print("=" * 70)

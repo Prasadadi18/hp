@@ -1,6 +1,7 @@
 """
 threat_engine.py — Threat scoring, action determination, and full pipeline orchestration.
 Combines real tools (Kafka, Elasticsearch, Vault) with simulated stages.
+BLOCK/CRITICAL threats require admin approval before credential rotation.
 """
 
 import time
@@ -18,6 +19,7 @@ from app import kafka_client
 from app import elastic_client
 from app import vault_client
 from app import pipeline_stages
+from app import admin_store
 
 logger = logging.getLogger("hpe.threat_engine")
 
@@ -138,28 +140,44 @@ def process_event(event: NetworkEvent) -> PredictionResult:
     stage6 = pipeline_stages.simulate_soar_automation(event_dict, is_threat, ensemble_score)
     stages.append(stage6)
 
-    # ── Stage 7: HashiCorp Vault (REAL) ──
+    # ── Stage 7: HashiCorp Vault (REAL — Human-in-the-Loop) ──
+    # For BLOCK/CRITICAL threats: DO NOT auto-rotate.
+    # Instead, create a pending admin alert. Admin must approve before rotation.
     vault_t0 = time.time()
     vault_result = {}
-    if is_threat:
-        vault_result = vault_client.rotate_credentials(
-            reason=f"threat_detected_score_{ensemble_score:.4f}",
-            user=event_dict.get("user_id", "unknown"),
-            threat_score=ensemble_score,
-        )
+    admin_alert = None
+
+    if is_threat and threat_action in (ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT):
+        # Create pending admin alert — rotation will happen when admin approves
+        vault_result = {
+            "status": "pending_admin_approval",
+            "message": "Credential rotation requires admin approval for BLOCK/CRITICAL threats",
+            "user": event_dict.get("user_id", "unknown"),
+            "threat_score": round(ensemble_score, 6),
+        }
+    elif is_threat and threat_action == ThreatAction.MONITOR:
+        # MONITOR-level threats: log but don't rotate
+        vault_result = {"status": "monitoring", "message": "Threat under observation"}
+    else:
+        vault_result = {"status": "no_rotation_needed"}
+        admin_store.increment_auto_allowed()
+
     vault_latency = (time.time() - vault_t0) * 1000
 
     stages.append(PipelineStageResult(
         stage_name="HashiCorp Vault",
         stage_number=7,
-        status="credentials_rotated" if is_threat and vault_result.get("success") else "no_action",
+        status="pending_approval" if is_threat and threat_action in (ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT) else "no_action",
         latency_ms=round(vault_latency, 2),
-        details=vault_result if is_threat else {"status": "no_rotation_needed"},
+        details=vault_result,
         is_real_tool=True,
     ))
 
-    # ── Stage 8: Credential Rotation (simulated) ──
-    stage8 = pipeline_stages.simulate_credential_rotation(is_threat, vault_result)
+    # ── Stage 8: Credential Rotation (deferred until admin approval) ──
+    stage8 = pipeline_stages.simulate_credential_rotation(
+        is_threat and threat_action in (ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT),
+        vault_result
+    )
     stages.append(stage8)
 
     # ── Stage 9: Credentials Distributed (simulated) ──
@@ -248,8 +266,55 @@ def process_event(event: NetworkEvent) -> PredictionResult:
         "Asia-Pacific": {"lat": 1.35, "lng": 103.82, "city": "Singapore"},
         "South-America": {"lat": -23.55, "lng": -46.63, "city": "São Paulo"},
     }
-    src_geo = region_geo.get(event_dict.get("ip_region", ""), {"lat": 0, "lng": 0, "city": "Unknown"})
-    dst_geo = region_geo.get(event_dict.get("user_region", ""), {"lat": 12.97, "lng": 77.59, "city": "Bangalore"})
+
+    # Server location (HPE HQ)
+    server_geo = {"lat": 12.97, "lng": 77.59, "city": "Bangalore"}
+
+    ip_region = event_dict.get("ip_region", "")
+    user_region = event_dict.get("user_region", "")
+
+    src_geo = region_geo.get(ip_region, {"lat": 0, "lng": 0, "city": "Unknown"})
+
+    # If source and destination regions are the same, route arc to the server
+    # so the globe shows a meaningful path (traffic flowing to the HPE server)
+    if ip_region == user_region or user_region not in region_geo:
+        dst_geo = server_geo
+    else:
+        dst_geo = region_geo.get(user_region, server_geo)
+
+    # Build the pipeline stages dicts for admin alert storage
+    stages_dicts = [s.model_dump() for s in stages]
+
+    # Create admin alert for BLOCK/CRITICAL threats (pending approval)
+    alert_id = None
+    if is_threat and threat_action in (ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT):
+        admin_alert = admin_store.create_alert(
+            event_id=event_id,
+            user_id=event_dict.get("user_id", "unknown"),
+            threat_score=round(ensemble_score, 6),
+            threat_action=threat_action.value,
+            xgb_score=round(xgb_score, 6),
+            lgb_score=round(lgb_score, 6),
+            ensemble_score=round(ensemble_score, 6),
+            threshold=round(threshold, 6),
+            event_data={
+                "user": event_dict.get("user_id", ""),
+                "source_ip": event_dict.get("source_ip", ""),
+                "ip_region": event_dict.get("ip_region", ""),
+                "action": event_dict.get("action", ""),
+                "anomaly_type": event_dict.get("anomaly_type", ""),
+                "geo_mismatch": event_dict.get("geo_mismatch", False),
+                "login_hour": event_dict.get("login_hour", 0),
+                "failed_attempts_last_15m": event_dict.get("failed_attempts_last_15m", 0),
+                "data_downloaded_mb": event_dict.get("data_downloaded_mb", 0),
+                "impossible_travel": event_dict.get("impossible_travel", False),
+            },
+            pipeline_stages=stages_dicts,
+            source_geo=src_geo,
+            destination_geo=dst_geo,
+            total_latency_ms=round(total_latency, 2),
+        )
+        alert_id = admin_alert["alert_id"]
 
     return PredictionResult(
         event_id=event_id,
@@ -272,5 +337,6 @@ def process_event(event: NetworkEvent) -> PredictionResult:
             "action": event_dict.get("action", ""),
             "anomaly_type": event_dict.get("anomaly_type", ""),
             "geo_mismatch": event_dict.get("geo_mismatch", False),
+            "alert_id": alert_id,
         },
     )

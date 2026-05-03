@@ -132,6 +132,7 @@ services:
       - PROFILES_PATH=/app/model_output/user_profiles.json
     volumes:
       - ./model_output:/app/model_output:ro
+      - ./dataset:/app/dataset:ro
     depends_on:
       kafka:
         condition: service_healthy

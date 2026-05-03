@@ -13,8 +13,9 @@ build/
 .venv/
 venv/
 env/
+backend/venv/
 
-# Model artifacts (large files)
+# Model artifacts (large binary files)
 model_output/*.joblib
 model_output/*.json
 
@@ -29,7 +30,7 @@ model_output/*.json
 
 # Node
 node_modules/
-dist/
+frontend/node_modules/
 
 # Docker
 *.env.local
@@ -38,6 +39,6 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Data files (too large for git)
+# Large v1 dataset directories (multi-GB)
 cyber_simulator_json_format/
-two_day_sample_cyber_simulator_json_format/sample_json_20260301/*.json
+two_day_sample_cyber_simulator_json_format/

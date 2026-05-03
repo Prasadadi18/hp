@@ -11,10 +11,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import APP_NAME, APP_TAGLINE, APP_VERSION, MODEL_PATH
 from app import inference, kafka_client, elastic_client, vault_client
-from app.routes import predict, health, pipeline, simulate
+from app.routes import predict, health, pipeline, simulate, admin
 import asyncio
-from app.ws_manager import manager as ws_manager
+from app.ws_manager import manager as ws_manager, admin_manager
 from app.threat_engine import process_raw_event
+from app import admin_store
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -88,13 +89,26 @@ async def lifespan(app: FastAPI):
             while True:
                 try:
                     result = await result_queue.get()
+                    result_data = result.model_dump()
+                    
+                    # Broadcast to simulation dashboard
                     await ws_manager.broadcast({
                         "type": "pipeline_result",
                         "data": {
                             "event": result.event_summary,
-                            "prediction": result.model_dump(),
+                            "prediction": result_data,
                         }
                     })
+                    
+                    # If this event created an admin alert, notify admin clients
+                    alert_id = result.event_summary.get("alert_id")
+                    if alert_id:
+                        alert = admin_store.get_alert(alert_id)
+                        if alert:
+                            await admin_manager.broadcast({
+                                "type": "new_alert",
+                                "data": alert,
+                            })
                 except Exception as e:
                     logger.error(f"Broadcast error: {e}")
         
@@ -138,6 +152,7 @@ app.include_router(predict.router)
 app.include_router(health.router)
 app.include_router(pipeline.router)
 app.include_router(simulate.router)
+app.include_router(admin.router)
 
 
 @app.get("/")

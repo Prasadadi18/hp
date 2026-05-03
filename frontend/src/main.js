@@ -8,6 +8,7 @@ import { initGlobe, addArc } from './globe.js';
 import { renderPipeline, animatePipelineEvent } from './pipeline.js';
 import { renderDashboard, updateDashboard, updateHealth, updateModelMetrics } from './dashboard.js';
 import { initStarField } from './effects.js';
+import { renderAdminDashboard, connectAdminWebSocket } from './admin.js';
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let ws = null;
@@ -31,6 +32,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Render dashboard
   renderDashboard('dashboard-content');
 
+  // Render admin dashboard
+  renderAdminDashboard('admin-content');
+
   // Initialize HUD from backend metrics (persisted across reloads)
   initHUDFromBackend();
 
@@ -45,6 +49,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Connect WebSocket for simulation
   connectSimulation();
+
+  // Connect admin WebSocket for real-time alerts
+  connectAdminWebSocket();
 
   // Start processing event queue
   processEventQueue();
@@ -334,7 +341,7 @@ function updateConnectionStatus(connected) {
 // ── Section Navigation ───────────────────────────────────────────────────────
 function setupSectionNav() {
   const dots = document.querySelectorAll('.section-nav-dot');
-  const sections = ['globe-section', 'pipeline-section', 'dashboard-section'];
+  const sections = ['globe-section', 'pipeline-section', 'dashboard-section', 'admin-section'];
 
   dots.forEach((dot, idx) => {
     dot.addEventListener('click', () => {
