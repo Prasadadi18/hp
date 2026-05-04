@@ -67,8 +67,6 @@ services:
       - hpe-network
 
   # ── PostgreSQL (Phase 2 — real DB for Vault dynamic secrets engine) ──
-  # vault-root is the superuser Vault uses to CREATE/DROP temp service users.
-  # The backend never connects as vault-root — it gets a short-lived dynamic user.
   postgres:
     image: postgres:16-alpine
     container_name: hpe-postgres
@@ -90,9 +88,6 @@ services:
       - hpe-network
 
   # ── HashiCorp Vault (server mode — persistent Raft storage) ──
-  # Pinned to 1.15.6 — latest tag has a broken entrypoint on Windows Docker Desktop.
-  # entrypoint: vault overrides docker-entrypoint.sh which tries to chown/setcap —
-  # both fail on Windows. Going straight to the vault binary skips all of that.
   vault:
     image: hashicorp/vault:1.15.6
     container_name: hpe-vault
@@ -139,6 +134,8 @@ services:
     restart: "no"
 
   # ── FastAPI Backend ──
+  # Phase 3: VAULT_TOKEN removed. Backend authenticates via AppRole using
+  # VAULT_ROLE_ID + VAULT_SECRET_ID read from the shared vault_data volume.
   backend:
     build:
       context: .
@@ -150,14 +147,17 @@ services:
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - VAULT_ADDR=http://vault:8200
-      - VAULT_TOKEN=hpe-dev-token
       - POSTGRES_URL=postgresql://localhost:5432/hpedb
       - MODEL_PATH=/app/model_output/pipeline_artifacts_v2.joblib
       - TEST_EVENTS_PATH=/app/model_output/test_events.json
       - PROFILES_PATH=/app/model_output/user_profiles.json
+      # VAULT_TOKEN is intentionally removed in Phase 3.
+      # The backend reads role_id + secret_id from /vault/data/.approle_credentials
+      # and exchanges them for a short-lived token via AppRole auth.
     volumes:
       - ./model_output:/app/model_output:ro
       - ./dataset:/app/dataset:ro
+      - vault_data:/vault/data:ro
     depends_on:
       kafka:
         condition: service_healthy
