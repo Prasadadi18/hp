@@ -357,6 +357,101 @@ The training dataset is included in `dataset/`:
 - `updated_realistic_network_logs.csv` — 100K+ network events with injected anomalies
 - `updated_realistic_user_profiles.csv` — User behavioral profiles
 
+---
+
+#### Pipeline Mode 1: One-Shot (Dataset → Zeek → Beats → ES → Kafka)
+
+Process the entire dataset through the pipeline in a single pass:
+
+1. Generate a synthetic PCAP from the CSV (or capture live network traffic):
+   ```bash
+   # Synthetic mode (default)
+   python scripts/generate_zeek_pcap.py
+   
+   # Live capture mode (requires scapy: pip install scapy)
+   python scripts/generate_zeek_pcap.py --live --duration 60 --interface eth0
+   ```
+2. Start Zeek and Filebeat via Docker Compose:
+   ```bash
+   docker compose up -d zeek filebeat elasticsearch kafka
+   ```
+3. Filebeat reads `dataset/zeek/conn.log` and ships events into Elasticsearch.
+4. Run the Elasticsearch → Kafka bridge service:
+   ```bash
+   docker compose up -d es-to-kafka
+   ```
+   This executes `scripts/es_to_kafka.py` (now with `--watch` mode) and continuously publishes documents from `zeek-conn-*` into Kafka topic `hpe-raw-events`.
+
+---
+
+#### Pipeline Mode 2: Live Replay (Dataset streamed as live traffic)
+
+Replay the dataset as if it were live network traffic — events arrive one at a time at a controlled rate through the full pipeline:
+
+```
+scripts/replay_live.py ──writes──▶ dataset/zeek-live/conn.log
+                                   │
+                              Filebeat (tail mode)
+                                   │
+                              Elasticsearch
+                                   │
+                              scripts/es_to_kafka.py (--watch)
+                                   │
+                                 Kafka  ──▶  AI Backend
+```
+
+**Option A — Via Docker Compose (recommended):**
+```bash
+# Start the core infrastructure + live replay pipeline
+docker compose up -d elasticsearch kafka
+docker compose --profile live-replay up -d
+
+# Also start the ES→Kafka bridge
+docker compose up -d es-to-kafka
+
+# Adjust replay speed via environment variable (default: 50 events/sec)
+REPLAY_RATE=100 docker compose --profile live-replay up -d
+```
+
+**Option B — Direct to Kafka (skip ES bridge, lowest latency):**
+```bash
+docker compose up -d kafka
+docker compose --profile live-kafka up -d
+
+# scripts/replay_live.py must also be running to feed events
+python scripts/replay_live.py --rate 50 --loop
+```
+
+**Option C — Run replay locally (no Docker for replay):**
+```bash
+# Start infrastructure in Docker
+docker compose up -d elasticsearch kafka
+
+# Run replay on your local machine
+python scripts/replay_live.py --rate 50 --loop
+
+# Start filebeat-live in Docker (it reads dataset/zeek-live/)
+docker compose --profile live-replay up -d filebeat-live
+docker compose up -d es-to-kafka
+```
+
+**Replay script options:**
+```bash
+python scripts/replay_live.py --help
+
+# Default: 50 events/sec, one pass
+python scripts/replay_live.py
+
+# Custom rate, infinite loop
+python scripts/replay_live.py --rate 100 --loop
+
+# Burst mode (max speed), 3 passes
+python scripts/replay_live.py --rate 0 --repeat 3
+
+# Clean previous output first
+python scripts/replay_live.py --clean --loop
+```
+
 To retrain the model, run:
 ```bash
 python export_v2_model.py
