@@ -210,7 +210,9 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         for c in missing:
             df[c] = 0.0
             
-        return df[_feature_cols].astype(float)
+        df = df[_feature_cols].astype(float)
+        df.fillna(0.0, inplace=True)
+        return df
 
     except Exception as e:
         logger.error(f"Feature engineering failed: {e}")
