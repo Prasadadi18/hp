@@ -113,13 +113,27 @@ kubectl apply -f k8s/vault/vault-init-job.yaml
 
 Write-Host "  Waiting for vault-init to complete (up to 3 min)..." -ForegroundColor DarkYellow
 kubectl wait --for=condition=Complete job/vault-init -n hpe --timeout=180s
+
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "ERROR: vault-init failed! Last 30 log lines:" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "WARNING: vault-init did not complete automatically." -ForegroundColor Yellow
+    Write-Host "Continuing deployment because Vault may be manually recoverable." -ForegroundColor Yellow
+
+    Write-Host ""
+    Write-Host "Last 30 vault-init log lines:" -ForegroundColor DarkYellow
     kubectl logs job/vault-init -n hpe --tail=30
-    exit 1
+
+    Write-Host ""
+    Write-Host "Current Vault status:" -ForegroundColor Cyan
+    kubectl exec vault-0 -n hpe -- vault status
+
+    Write-Host ""
+    Write-Host "Proceeding with deployment..." -ForegroundColor Green
 }
-Write-Host "  vault-init complete. Last 5 lines:" -ForegroundColor Green
-kubectl logs job/vault-init -n hpe --tail=5
+else {
+    Write-Host "  vault-init complete. Last 5 lines:" -ForegroundColor Green
+    kubectl logs job/vault-init -n hpe --tail=5
+}
 
 # ── Phase 6: App ────────────────────────────────────────────────────────────
 Write-Step "6" "Deploying backend and frontend"
