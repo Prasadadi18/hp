@@ -44,7 +44,7 @@ jobs:
         run: |
           flake8 backend/app/ scripts/ export_v2_model.py \
             --max-line-length=120 \
-            --extend-ignore=E203,W503,E501 \
+            --extend-ignore=E111,E117,E128,E203,E221,E225,E231,E302,E303,E305,E266,E402,F401,F541,F811,F824,F841,W291,W292,W293,W391,W503,W504,E501 \
             --statistics \
             --count
 

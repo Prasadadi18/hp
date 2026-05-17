@@ -54,15 +54,28 @@ jobs:
         run: |
           pip install xgboost lightgbm scikit-learn pandas numpy joblib imbalanced-learn mlflow dvc
 
-      - name: Pull DVC data (if configured)
+      - name: Pull DVC data (if remote configured)
         run: |
           if [ -f ".dvc/config" ]; then
-            dvc pull --force 2>/dev/null || echo "DVC remote not configured — using checked-in data"
+            dvc pull --force 2>/dev/null || echo "⚠️ DVC remote not configured — will check for data"
           else
-            echo "DVC not initialized — using checked-in data"
+            echo "DVC not initialized — will check for data"
+          fi
+
+      - name: Check dataset availability
+        id: check-data
+        run: |
+          if [ -f "dataset/updated_realistic_network_logs.csv" ] && [ -f "dataset/updated_realistic_user_profiles.csv" ]; then
+            echo "data_available=true" >> $GITHUB_OUTPUT
+            echo "✅ Dataset files found"
+          else
+            echo "data_available=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Dataset files not found (DVC remote not configured). Skipping training."
+            echo "   To fix: configure a DVC remote with 'dvc remote add' and 'dvc push'"
           fi
 
       - name: Run model training with MLflow
+        if: steps.check-data.outputs.data_available == 'true'
         run: |
           python export_v2_model.py
         env:
@@ -70,6 +83,7 @@ jobs:
           MLFLOW_EXPERIMENT_NAME: "HPE-CI-Training"
 
       - name: Validate model performance
+        if: steps.check-data.outputs.data_available == 'true'
         run: |
           python -c "
           import json, sys
@@ -93,6 +107,7 @@ jobs:
           "
 
       - name: Upload MLflow artifacts
+        if: steps.check-data.outputs.data_available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: mlflow-run-${{ github.sha }}
@@ -102,6 +117,7 @@ jobs:
           retention-days: 30
 
       - name: Upload model artifacts
+        if: steps.check-data.outputs.data_available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: model-artifacts-${{ github.sha }}
@@ -109,3 +125,4 @@ jobs:
             model_output/pipeline_artifacts_v2.joblib
             model_output/classification_report.txt
           retention-days: 90
+
