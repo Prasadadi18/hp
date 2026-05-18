@@ -195,14 +195,15 @@ Once all systems are healthy, open your browser and navigate to:
 * **Public Login Portal:** http://localhost:8080
 * **Adminer Database Manager:** http://localhost:9090
 
-> **Note on restarts:** If you stop with `docker compose down` (without `-v`), Vault will be sealed on the next startup. Unseal it manually with:
+> **Note on restarts:** If you stop with `docker compose down` (without `-v`), Vault will start in a sealed state on the next startup. You can automatically unseal Vault and re-authenticate the backend with a single command:
 > ```bash
-> docker exec hpe-vault vault operator unseal -address=http://127.0.0.1:8200 YOUR_UNSEAL_KEY
+> # Restart Vault and Vault-Init to trigger automated unsealing
+> docker compose restart vault vault-init
+> 
+> # Restart the backend and proxy to establish a fresh AppRole session
+> docker compose restart backend login-portal
 > ```
-> The unseal key is printed in the logs of `hpe-vault-init` on first boot. Then restart the backend:
-> ```bash
-> docker compose restart backend
-> ```
+
 
 ---
 
