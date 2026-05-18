@@ -306,6 +306,16 @@ function handleAdminMessage(message) {
       loadRegistrations();
       break;
 
+    case 'vpn_login_alert':
+      // VPN login detected — show toast in admin console
+      const vpn = message.data;
+      const vpnStatus = vpn.login_success ? '✓ Login OK' : '✗ Login Failed';
+      showToast(
+        '🛡️ VPN LOGIN DETECTED',
+        `${vpn.username} from ${vpn.source_ip} (${vpn.vpn_provider}, ${vpn.city}, ${vpn.country}) — ${vpnStatus}`
+      );
+      break;
+
     case 'admin_connected':
       console.log('[ADMIN] Connected with stats:', message.data);
       break;
@@ -355,7 +365,7 @@ function renderAlertList() {
     return;
   }
 
-  list.innerHTML = alerts.map(alert => {
+  list.innerHTML = filteredAlerts.map(alert => {
     const isCritical = alert.threat_action === 'CRITICAL_ALERT';
     const isBlock = alert.threat_action === 'BLOCK';
     const severityClass = isCritical ? 'severity-critical' : isBlock ? 'severity-high' : 'severity-medium';

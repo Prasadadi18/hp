@@ -236,18 +236,19 @@ services:
       - backend
     networks:
       - hpe-network
-redis:
-  image: redis:7-alpine
-  container_name: hpe-redis
-  ports:
-    - "6379:6379"
-  networks:
-    - hpe-network
-  healthcheck:
-    test: [ "CMD", "redis-cli", "ping" ]
-    interval: 10s
-    timeout: 5s
-    retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: hpe-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - hpe-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # ── Live Replay: Streams dataset conn.log as live traffic ──
   # Reads dataset/zeek/conn.log and writes it line-by-line to

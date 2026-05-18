@@ -10,7 +10,8 @@ const state = {
   totalBlocked: 0,
   avgLatency: 0,
   latencySum: 0,
-  threatFeed: [],
+  replayedThreats: [],
+  liveThreats: [],
   attackTypes: {},
   vaultRotationCount: 0,
 };
@@ -146,12 +147,12 @@ export function renderDashboard(containerId) {
                 <select id="threat-feed-filter" class="vault-filter-select" style="width: auto; padding: 4px 8px; background: rgba(20, 20, 25, 0.8);">
                     <option value="all">All Logs</option>
                     <option value="replayed">Replayed Dataset Only</option>
-                    <option value="live">Live Portal Logins Only</option>
+                    <option value="live" selected>Live Portal Logins Only</option>
                 </select>
             </div>
             <div style="display: flex; gap: var(--space-xl); flex: 1;">
                 <!-- Left Sub-column: Replayed Dataset -->
-                <div class="threat-feed" id="threat-feed-replayed" style="flex: 1; height: 100%;">
+                <div class="threat-feed" id="threat-feed-replayed" style="flex: 1; height: 100%; display: none;">
                   <div class="threat-feed-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
                     <span class="threat-feed-title" style="font-size: 14px; font-weight: 600; letter-spacing: 0.5px;">📊 Replayed Dataset Threats</span>
                     <span class="live-badge" style="background: rgba(0, 169, 130, 0.1); color: var(--cyan); font-size: 8px; padding: 2px 6px; border-radius: 4px;">ACTIVE</span>
@@ -164,7 +165,7 @@ export function renderDashboard(containerId) {
                 </div>
 
                 <!-- Right Sub-column: Live Portal Logins -->
-                <div class="threat-feed" id="threat-feed-live" style="flex: 1; height: 100%; border-left: 1px solid var(--border-color); padding-left: 20px;">
+                <div class="threat-feed" id="threat-feed-live" style="flex: 1; height: 100%; border-left: none; padding-left: 0;">
                   <div class="threat-feed-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
                     <span class="threat-feed-title" style="font-size: 14px; font-weight: 600; letter-spacing: 0.5px;">🌐 Live Portal Logins</span>
                     <span class="live-badge" style="background: rgba(233, 69, 96, 0.15); color: var(--magenta); font-size: 8px; padding: 2px 6px; border-radius: 4px; animation: pulse 2s infinite;">LIVE PORTAL</span>
@@ -329,11 +330,11 @@ async function initDashboardFromBackend() {
     
     // Hydrate threat feed
     try {
-      const feedRes = await fetch('/api/elasticsearch/recent-threats?size=20');
+      const feedRes = await fetch('/api/elasticsearch/recent-threats?size=100');
       if (feedRes.ok) {
         const feedData = await feedRes.json();
         if (feedData.threats && feedData.threats.length > 0) {
-          state.threatFeed = feedData.threats.map(t => ({
+          const mapped = feedData.threats.map(t => ({
             is_threat: true,
             threat_score: t.threat_score,
             event_summary: {
@@ -344,6 +345,8 @@ async function initDashboardFromBackend() {
             },
             time: new Date(t.timestamp).toLocaleTimeString(),
           }));
+          state.replayedThreats = mapped.filter(t => t.event_summary?.event_source !== 'live_portal');
+          state.liveThreats = mapped.filter(t => t.event_summary?.event_source === 'live_portal');
           updateThreatFeed();
         }
       }
@@ -382,11 +385,17 @@ export function updateDashboard(prediction) {
 
   // Always add to threat feed if it is a threat OR from live portal
   if (prediction.is_threat || isLivePortal) {
-    state.threatFeed.unshift({
+    const item = {
       ...prediction,
       time: new Date().toLocaleTimeString(),
-    });
-    if (state.threatFeed.length > 50) state.threatFeed.pop();
+    };
+    if (isLivePortal) {
+      state.liveThreats.unshift(item);
+      if (state.liveThreats.length > 50) state.liveThreats.pop();
+    } else {
+      state.replayedThreats.unshift(item);
+      if (state.replayedThreats.length > 50) state.replayedThreats.pop();
+    }
   }
 
   // Update metric cards
@@ -670,8 +679,8 @@ function updateThreatFeed() {
   const liveList = document.getElementById('threat-feed-live-list');
   if (!replayedList || !liveList) return;
 
-  const replayedEvents = state.threatFeed.filter(t => (t.event_summary?.event_source || 'replayed_dataset') !== 'live_portal');
-  const liveEvents = state.threatFeed.filter(t => t.event_summary?.event_source === 'live_portal');
+  const replayedEvents = state.replayedThreats || [];
+  const liveEvents = state.liveThreats || [];
 
   // Render Replayed
   if (replayedEvents.length > 0) {
@@ -744,4 +753,126 @@ function setHealthDot(id, isHealthy) {
   const dot = document.getElementById(id);
   if (!dot) return;
   dot.className = `status-dot ${isHealthy ? '' : 'danger'}`;
+}
+
+
+// ── VPN Login Alert Banner ───────────────────────────────────────────────────
+
+let _vpnAlertContainer = null;
+
+function _ensureVpnAlertContainer() {
+  if (_vpnAlertContainer && document.body.contains(_vpnAlertContainer)) return;
+  _vpnAlertContainer = document.createElement('div');
+  _vpnAlertContainer.className = 'vpn-alert-container';
+  _vpnAlertContainer.id = 'vpn-alert-container';
+  document.body.appendChild(_vpnAlertContainer);
+}
+
+/**
+ * Show a VPN login alert banner at the top of the screen.
+ * Called when a user logs in from a VPN-detected IP.
+ * @param {object} data - { username, source_ip, vpn_provider, country, city, login_success, timestamp }
+ */
+export function showVpnAlert(data) {
+  _ensureVpnAlertContainer();
+
+  const alertId = `vpn-alert-${Date.now()}`;
+  const statusClass = data.login_success ? 'vpn-status-success' : 'vpn-status-failure';
+  const statusText = data.login_success ? '✓ LOGIN SUCCESS' : '✗ LOGIN FAILED';
+  const timeStr = data.timestamp
+    ? new Date(data.timestamp).toLocaleTimeString()
+    : new Date().toLocaleTimeString();
+
+  const banner = document.createElement('div');
+  banner.className = 'vpn-alert-banner';
+  banner.id = alertId;
+  banner.innerHTML = `
+    <div class="vpn-alert-header">
+      <div class="vpn-alert-title">
+        <span class="vpn-shield-icon">🛡️</span>
+        VPN Login Detected
+      </div>
+      <button class="vpn-alert-close" onclick="event.stopPropagation(); document.getElementById('${alertId}').classList.add('dismissing'); setTimeout(() => document.getElementById('${alertId}')?.remove(), 400);">✕</button>
+    </div>
+    <div class="vpn-alert-body">
+      <div class="vpn-alert-field">
+        <span class="vpn-alert-field-label">Username</span>
+        <span class="vpn-alert-field-value">${data.username || 'unknown'}</span>
+      </div>
+      <div class="vpn-alert-field">
+        <span class="vpn-alert-field-label">Source IP</span>
+        <span class="vpn-alert-field-value vpn-ip">${data.source_ip || '--'}</span>
+      </div>
+      <div class="vpn-alert-field">
+        <span class="vpn-alert-field-label">VPN Provider / ISP</span>
+        <span class="vpn-alert-field-value vpn-provider">${data.vpn_provider || 'Unknown'}</span>
+      </div>
+      <div class="vpn-alert-field">
+        <span class="vpn-alert-field-label">Location</span>
+        <span class="vpn-alert-field-value">${data.city || '?'}, ${data.country || '?'}</span>
+      </div>
+      <div class="vpn-alert-field">
+        <span class="vpn-alert-field-label">Status</span>
+        <span class="vpn-alert-field-value ${statusClass}">${statusText}</span>
+      </div>
+      <div class="vpn-alert-field">
+        <span class="vpn-alert-field-label">Time</span>
+        <span class="vpn-alert-field-value">${timeStr}</span>
+      </div>
+    </div>
+    <div class="vpn-alert-footer">
+      <span style="color: var(--amber); font-weight: 600; font-size: 10px; display: flex; align-items: center; gap: 4px;">👉 Click to review in Admin Console</span>
+      <span class="vpn-alert-countdown" id="${alertId}-countdown">Auto-dismiss in 15s</span>
+    </div>
+  `;
+
+  // Click handler to redirect to Admin Console (simulates nav dot click for bulletproof scroll transitions)
+  banner.addEventListener('click', (e) => {
+    // If the close button was clicked, don't redirect
+    if (e.target.closest('.vpn-alert-close')) {
+      return;
+    }
+    
+    const dots = document.querySelectorAll('.section-nav-dot');
+    if (dots && dots.length >= 4) {
+      console.log('[HPE] Redirecting to Admin Console via native navigation dot simulation');
+      dots[3].click();
+    } else {
+      const adminSection = document.getElementById('admin-section');
+      if (adminSection) {
+        console.log('[HPE] Redirecting to Admin Console via direct scroll fallback');
+        adminSection.scrollIntoView({ behavior: 'smooth' });
+      }
+    }
+  });
+
+  _vpnAlertContainer.appendChild(banner);
+
+  // Countdown + auto-dismiss
+  let remaining = 15;
+  const interval = setInterval(() => {
+    remaining--;
+    const countdownEl = document.getElementById(`${alertId}-countdown`);
+    if (countdownEl) {
+      countdownEl.textContent = `Auto-dismiss in ${remaining}s`;
+    }
+    if (remaining <= 0) {
+      clearInterval(interval);
+      const el = document.getElementById(alertId);
+      if (el) {
+        el.classList.add('dismissing');
+        setTimeout(() => el.remove(), 400);
+      }
+    }
+  }, 1000);
+
+  // Limit to 3 visible alerts max
+  const alerts = _vpnAlertContainer.querySelectorAll('.vpn-alert-banner');
+  if (alerts.length > 3) {
+    const oldest = alerts[0];
+    oldest.classList.add('dismissing');
+    setTimeout(() => oldest.remove(), 400);
+  }
+
+  console.log(`[HPE] 🛡️ VPN Alert: ${data.username} from ${data.source_ip} (${data.vpn_provider})`);
 }
