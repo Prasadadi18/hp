@@ -67,6 +67,56 @@ services:
     networks:
       - hpe-network
 
+  # ── Zeek IDS (reads synthetic PCAP from dataset and writes Zeek logs) ──
+  zeek:
+    image: zeek/zeek:5.0.5
+    container_name: hpe-zeek
+    volumes:
+      - ./dataset:/dataset:ro
+      - ./dataset/zeek:/zeek_out
+    command: sh -c "mkdir -p /zeek_out && cd /zeek_out && zeek -C -r /dataset/conn.pcap && tail -f /dev/null"
+    depends_on:
+      - elasticsearch
+    networks:
+      - hpe-network
+
+  # ── Filebeat (Elastic Beats) ──
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.15.0
+    container_name: hpe-filebeat
+    user: root
+    volumes:
+      - ./dataset/zeek:/usr/share/filebeat/zeek:ro
+      - ./beats/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+    depends_on:
+      - elasticsearch
+      - zeek
+    networks:
+      - hpe-network
+    command: filebeat -e -c /usr/share/filebeat/filebeat.yml --strict.perms=false
+
+  # ── Elasticsearch to Kafka bridge ──
+  es-to-kafka:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: hpe-es-to-kafka
+    working_dir: /repo
+    volumes:
+      - .:/repo:ro
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - hpe-network
+    command: sh -c "sleep 15 && python scripts/es_to_kafka.py --es-url $${ELASTICSEARCH_URL} --kafka-servers $${KAFKA_BOOTSTRAP_SERVERS} --index zeek-conn-* --topic hpe-raw-events --watch --poll-interval 5"
+    restart: on-failure
+
   # ── PostgreSQL (Phase 2 — real DB for Vault dynamic secrets engine) ──
   postgres:
     image: postgres:16-alpine
@@ -197,6 +247,70 @@ redis:
     interval: 10s
     timeout: 5s
     retries: 5
+
+  # ── Live Replay: Streams dataset conn.log as live traffic ──
+  # Reads dataset/zeek/conn.log and writes it line-by-line to
+  # dataset/zeek-live/conn.log at a controlled rate.
+  # Usage: docker compose --profile live-replay up -d
+  replay:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: hpe-replay
+    working_dir: /repo
+    volumes:
+      - .:/repo
+    command: >
+      python scripts/replay_live.py
+        --source /repo/dataset/zeek/conn.log
+        --output /repo/dataset/zeek-live/conn.log
+        --rate ${REPLAY_RATE:-50}
+        --loop
+    depends_on:
+      - elasticsearch
+    networks:
+      - hpe-network
+    profiles:
+      - live-replay
+
+  # ── Filebeat for Live Replay (tail mode → Elasticsearch) ──
+  # Watches dataset/zeek-live/conn.log for new lines and ships to ES.
+  # Pair with the 'replay' service and 'es-to-kafka' to get events into Kafka.
+  # Usage: docker compose --profile live-replay up -d
+  filebeat-live:
+    image: docker.elastic.co/beats/filebeat:8.15.0
+    container_name: hpe-filebeat-live
+    user: root
+    volumes:
+      - ./dataset/zeek-live:/usr/share/filebeat/zeek-live:ro
+      - ./beats/filebeat-live.yml:/usr/share/filebeat/filebeat.yml:ro
+    depends_on:
+      - elasticsearch
+      - replay
+    networks:
+      - hpe-network
+    command: filebeat -e -c /usr/share/filebeat/filebeat.yml --strict.perms=false
+    profiles:
+      - live-replay
+
+  # ── Filebeat Direct-to-Kafka (tail mode → Kafka, bypass ES) ──
+  # Alternative: sends Zeek events straight to Kafka without ES bridge.
+  # Usage: docker compose --profile live-kafka up -d
+  filebeat-kafka:
+    image: docker.elastic.co/beats/filebeat:8.15.0
+    container_name: hpe-filebeat-kafka
+    user: root
+    volumes:
+      - ./dataset/zeek-live:/usr/share/filebeat/zeek-live:ro
+      - ./beats/filebeat-kafka.yml:/usr/share/filebeat/filebeat.yml:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - hpe-network
+    command: filebeat -e -c /usr/share/filebeat/filebeat.yml --strict.perms=false
+    profiles:
+      - live-kafka
 
 volumes:
   kafka_data:

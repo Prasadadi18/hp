@@ -119,6 +119,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "WARNING: vault-init did not complete automatically." -ForegroundColor Yellow
     Write-Host "Continuing deployment because Vault may be manually recoverable." -ForegroundColor Yellow
 
+<<<<<<< HEAD
     Write-Host ""
     Write-Host "Last 30 vault-init log lines:" -ForegroundColor DarkYellow
     kubectl logs job/vault-init -n hpe --tail=30
@@ -137,8 +138,14 @@ else {
 
 # ── Phase 6: App ────────────────────────────────────────────────────────────
 Write-Step "6" "Deploying backend and frontend"
+=======
+# Deploy application
+Write-Host ""
+Write-Host "[6/6] Deploying application components..." -ForegroundColor Yellow
+>>>>>>> upstream/main
 kubectl apply -f k8s/backend/
 kubectl apply -f k8s/frontend/
+kubectl apply -f k8s/live-pipeline/
 
 Start-Sleep -Seconds 10
 Wait-ForPods "app=backend"  "120s"

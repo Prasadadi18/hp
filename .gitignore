@@ -15,7 +15,7 @@ venv/
 env/
 backend/venv/
 
-# Model artifacts (large binary files)
+# Model artifacts (large binary files — tracked by DVC)
 model_output/*.joblib
 model_output/*.json
 
@@ -42,3 +42,15 @@ Thumbs.db
 # Large v1 dataset directories (multi-GB)
 cyber_simulator_json_format/
 two_day_sample_cyber_simulator_json_format/
+
+# Live replay output (generated at runtime)
+dataset/zeek-live/
+
+# ── MLflow ──
+mlruns/
+mlflow.db
+
+# ── DVC ──
+/dataset/updated_realistic_network_logs.csv
+/dataset/updated_realistic_user_profiles.csv
+/dataset/conn.pcap
