@@ -557,14 +557,14 @@ function renderAlertDetail(alert) {
         </div>
       </div>
 
-      ${alert.rotation_result ? `
+      ${alert.rotation_result && alert.rotation_result.user_rotation ? `
       <!-- Rotation Result -->
       <div class="admin-facts-section">
         <div class="admin-section-label">🔐 Vault Rotation Result</div>
         <div class="admin-rotation-result">
-          <div class="admin-fact"><span class="admin-fact-key">Success</span><span class="admin-fact-val ${alert.rotation_result.success ? 'success' : 'danger'}">${alert.rotation_result.success ? '✅ YES' : '❌ FAILED'}</span></div>
-          <div class="admin-fact"><span class="admin-fact-key">Rotation #</span><span class="admin-fact-val">${alert.rotation_result.rotation_number || '--'}</span></div>
-          <div class="admin-fact"><span class="admin-fact-key">Rotation ID</span><span class="admin-fact-val" style="font-size: 10px;">${alert.rotation_result.rotation_id || '--'}</span></div>
+          <div class="admin-fact"><span class="admin-fact-key">Success</span><span class="admin-fact-val ${alert.rotation_result.user_rotation.success ? 'success' : 'danger'}">${alert.rotation_result.user_rotation.success ? '✅ YES' : '❌ FAILED'}</span></div>
+          <div class="admin-fact"><span class="admin-fact-key">Rotation #</span><span class="admin-fact-val">${alert.rotation_result.user_rotation.rotation_number || '--'}</span></div>
+          <div class="admin-fact"><span class="admin-fact-key">Rotation ID</span><span class="admin-fact-val" style="font-size: 10px;">${alert.rotation_result.user_rotation.rotation_id || '--'}</span></div>
         </div>
       </div>
       ` : ''}
