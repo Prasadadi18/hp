@@ -186,8 +186,8 @@ async function loadRegistrations() {
     }
 
     tbody.innerHTML = registrations.map(reg => {
-      const vpnBadgeHtml = reg.is_vpn 
-        ? `<span class="badge-vpn-warn">⚠️ VPN IP Endpoint</span>` 
+      const vpnBadgeHtml = reg.is_vpn
+        ? `<span class="badge-vpn-warn">⚠️ VPN IP Endpoint</span>`
         : '';
       return `
         <tr>
@@ -207,7 +207,7 @@ async function loadRegistrations() {
 }
 
 
-window._approveReg = async function(username) {
+window._approveReg = async function (username) {
   const password = prompt(`Enter temporary password for ${username}:`);
   if (!password) return;
 
@@ -231,7 +231,7 @@ window._approveReg = async function(username) {
 
 
 
-window._rejectReg = async function(username) {
+window._rejectReg = async function (username) {
   if (!confirm(`Are you sure you want to reject registration for ${username}?`)) return;
   try {
     const res = await fetch(`/api/admin/registrations/${username}/reject`, { method: 'POST' });
@@ -413,7 +413,7 @@ function renderAlertList() {
 /**
  * Select and show full detail for an alert
  */
-window._selectAdminAlert = async function(alertId) {
+window._selectAdminAlert = async function (alertId) {
   selectedAlertId = alertId;
   renderAlertList(); // Update selection highlight
 
@@ -445,7 +445,7 @@ function renderAlertDetail(alert) {
   // Build pipeline stages table
   const stagesHtml = (alert.pipeline_stages || []).map((s, i) => `
     <tr>
-      <td style="color: var(--text-muted);">${s.stage_number || i+1}</td>
+      <td style="color: var(--text-muted);">${s.stage_number || i + 1}</td>
       <td>${s.stage_name || '--'}</td>
       <td><span class="admin-stage-status ${s.status === 'pending_approval' ? 'pending' : ''}">${s.status || '--'}</span></td>
       <td style="color: var(--amber);">${(s.latency_ms || 0).toFixed(1)}ms</td>
@@ -520,10 +520,10 @@ function renderAlertDetail(alert) {
       <!-- Threat Trigger Reasons -->
       <div class="admin-facts-section">
         <div class="admin-section-label">⚠️ Threat Trigger Reasons</div>
-        ${event.threat_reasons && event.threat_reasons.length > 0 
-          ? `<ul class="admin-reasons-list">${event.threat_reasons.map(r => `<li>${r}</li>`).join('')}</ul>`
-          : `<div style="color: var(--text-muted); font-size: 12px; margin-top: 8px; font-family: var(--font-mono); padding-left: 8px;">No explicit anomalous factors detected (ensemble probability model match)</div>`
-        }
+        ${event.threat_reasons && event.threat_reasons.length > 0
+      ? `<ul class="admin-reasons-list">${event.threat_reasons.map(r => `<li>${r}</li>`).join('')}</ul>`
+      : `<div style="color: var(--text-muted); font-size: 12px; margin-top: 8px; font-family: var(--font-mono); padding-left: 8px;">No explicit anomalous factors detected (ensemble probability model match)</div>`
+    }
       </div>
 
       <!-- Geo Info -->
@@ -602,7 +602,7 @@ function renderAlertDetail(alert) {
 /**
  * Approve credential rotation
  */
-window._approveAlert = async function(alertId) {
+window._approveAlert = async function (alertId) {
   const notes = document.getElementById('admin-notes-input')?.value || '';
   const btn = document.querySelector('.admin-btn-approve');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Rotating credentials...'; }
@@ -636,7 +636,7 @@ window._approveAlert = async function(alertId) {
 /**
  * Reject alert (false positive)
  */
-window._rejectAlert = async function(alertId) {
+window._rejectAlert = async function (alertId) {
   const notes = document.getElementById('admin-notes-input')?.value || '';
 
   try {
