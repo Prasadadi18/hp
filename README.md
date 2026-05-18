@@ -66,32 +66,54 @@ This creates `model_output/pipeline_artifacts_v2.joblib`, `test_events.json`, an
 ### Option 1: Full Enterprise Stack (Docker Compose) 🐳
 *Recommended for single-machine testing.*
 
-This method will automatically download, build, and orchestrate all 7 containers: Kafka, Elasticsearch, Kibana, HashiCorp Vault, PostgreSQL, the Python AI Backend, and the Vite Frontend.
+This method automatically builds, mounts, and orchestrates the entire containerized architecture: Kafka, Elasticsearch, Kibana, HashiCorp Vault, PostgreSQL, the FastAPI AI Backend, the Vite 3D Frontend, Nginx (serving the Public Login Portal), Adminer, and a pre-configured Ngrok Tunnel.
 
 **Prerequisites:**
 * Docker Desktop running with at least **8 GB of Memory** allocated (required for Elasticsearch)
 * Python 3.10+ installed locally
 
+#### 🚀 Recommended Fast Startup (One-Click)
+
+We have provided a **one-shot launcher** that automates the whole deployment, checks prerequisites, builds files, and extracts details.
+
+On **Windows PowerShell / Command Prompt**, simply run:
+```bash
+run-compose
+```
+
+**What the launcher script does for you:**
+1. **Verifies Prerequisites:** Confirms Docker is active.
+2. **Generates ML Models:** Detects if machine learning pipeline artifacts are present. If missing, it installs the necessary packages and generates them automatically.
+3. **One-Command Orchestration:** Starts the default stack AND the `live-replay` profile (`docker compose --profile live-replay up -d --build`).
+4. **Health Checker:** Loops until the Backend, Vault, and Postgres report as healthy.
+5. **Dynamic Ngrok Tunnel Extraction:** Retrieves the dynamic public URL of the Public Login Portal from the active Ngrok status endpoint and prints it out automatically.
+
+---
+
+#### 🛠️ Manual Startup (Alternative)
+
+If you prefer starting components manually:
+
 **Step 1 — Start the full stack:**
 ```bash
-docker-compose up --build
+# Start core services and the live-replay pipeline
+docker compose --profile live-replay up -d --build
 ```
-On **first boot**, allow **2-3 minutes** for all services to fully initialize. Wait until all containers report as healthy before opening the browser.
+On **first boot**, allow **2-3 minutes** for all services to fully initialize.
 
 **Step 2 — Open the application:**
-
 Once all systems are healthy, open your browser and navigate to:
-**http://localhost:5173**
+* **3D Security Dashboard:** http://localhost:5173
+* **Public Login Portal:** http://localhost:8080
+* **Adminer Database Manager:** http://localhost:9090
 
-Navigate to the **Admin Console** to see pending threat alerts.
-
-> **Note on restarts:** If you stop with `docker-compose down` (without `-v`), Vault will be sealed on the next startup. Unseal it manually with:
+> **Note on restarts:** If you stop with `docker compose down` (without `-v`), Vault will be sealed on the next startup. Unseal it manually with:
 > ```bash
 > docker exec hpe-vault vault operator unseal -address=http://127.0.0.1:8200 YOUR_UNSEAL_KEY
 > ```
-> The unseal key is printed in `docker logs hpe-vault-init` on first boot. Then restart the backend:
+> The unseal key is printed in the logs of `hpe-vault-init` on first boot. Then restart the backend:
 > ```bash
-> docker-compose restart backend
+> docker compose restart backend
 > ```
 
 ---
@@ -260,6 +282,29 @@ After this, refresh the dashboard — the Vault indicator should turn green (�
 *Recommended for UI development or low-resource machines.*
 
 If you do not want to spin up the heavy infrastructure containers, you can run the backend and frontend scripts directly on your local system. The dashboard will intelligently fall back to generating simulation traffic locally.
+
+#### 🚀 Recommended Fast Startup (One-Click)
+
+We have provided a **one-shot local launcher** that automates the entire local setup process.
+
+On **Windows PowerShell / Command Prompt**, simply run:
+```bash
+run-local
+```
+
+**What the launcher script does for you:**
+1. **Verifies Prerequisites:** Confirms Python 3.10+ and Node.js (v18+) are installed.
+2. **Generates ML Models:** Checks if machine learning pipeline artifacts are present. If missing, it installs the necessary packages and generates them automatically.
+3. **Creates Python Venv:** Creates a virtual environment in `backend/venv` and runs `pip install` for backend dependencies.
+4. **Installs Node Modules:** Installs required packages in the `frontend` folder if missing.
+5. **Starts Application Services:** Boots the FastAPI backend on port `8000` and the Vite frontend on port `5173` in separate popped-up console windows.
+6. **Autoplays Browser:** Automatically opens `http://localhost:5173` in your default web browser.
+
+---
+
+#### 🛠️ Manual Startup (Alternative)
+
+If you prefer starting components manually:
 
 **Step 1: Generate model artifacts (if not already done):**
 ```bash

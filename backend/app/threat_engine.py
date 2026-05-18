@@ -184,11 +184,132 @@ def _determine_affected_service(event_dict: dict) -> str:
         return "elasticsearch"
 
 
+def _determine_threat_reasons(event_dict: dict, score: float, threshold: float) -> list:
+    """Analyze the event dict and ML score to formulate human-readable trigger reasons."""
+    reasons = []
+    
+    # 1. Look at explicit anomaly types
+    anomaly = event_dict.get("anomaly_type", "None")
+    if anomaly and anomaly != "None":
+        anomaly_map = {
+            "brute_force": "Brute Force Attack Pattern",
+            "data_exfiltration": "Data Exfiltration Anomaly",
+            "bulk_download": "Bulk Data Download Anomaly",
+            "lateral_movement": "Lateral Movement Pattern",
+            "privilege_escalation": "Privilege Escalation Attempt",
+        }
+        reasons.append(anomaly_map.get(anomaly, f"Anomaly: {anomaly}"))
+        
+    # 2. Check impossible travel or geo mismatch
+    if event_dict.get("impossible_travel"):
+        if event_dict.get("is_vpn"):
+            reasons.append("Impossible Travel via rapid VPN server hopping (potential hijack)")
+        else:
+            reasons.append("Impossible Travel (login from two distant locations in rapid succession)")
+    elif event_dict.get("geo_mismatch"):
+        if event_dict.get("is_vpn"):
+            reasons.append("Geographic Mismatch via Commercial VPN Exit Node (Germany)")
+        else:
+            reasons.append("Geographic Mismatch (source IP region differs from typical user profile)")
+            
+    # Check for general VPN connection warning if no other geo anomalies are present
+    if event_dict.get("is_vpn") and not event_dict.get("geo_mismatch") and not event_dict.get("impossible_travel"):
+        reasons.append("Connection originating from public/commercial VPN node")
+        
+    # 3. Check for high failed attempts
+    failed_attempts = event_dict.get("failed_attempts_last_15m", 0)
+    if failed_attempts >= 5:
+        reasons.append(f"High Volume of Failed Authentication Attempts ({failed_attempts} within 15m)")
+        
+    # 4. Check for extreme data downloads
+    download_mb = event_dict.get("data_downloaded_mb", 0.0)
+    if download_mb > 500:
+        reasons.append(f"Extreme Outbound Data Volume ({download_mb:.1f} MB downloaded)")
+        
+    # 5. Check for privilege escalation (role vs action deviation)
+    action = event_dict.get("action", "")
+    role = event_dict.get("role", "")
+    if action == "admin" and role != "Admin":
+        reasons.append(f"Unauthorized Admin Action (User role '{role}' performed action '{action}')")
+        
+    # If no explicit reason is found but score is high, label as anomalous behavioral pattern
+    if not reasons:
+        reasons.append(f"Anomalous Behavioral Pattern (AI Model Ensemble confidence: {score*100:.1f}%)")
+        
+    return reasons
+
+
 def process_raw_event(raw_event: dict) -> PredictionResult:
     """
     Called by the Kafka consumer thread.
     Converts a raw dict from Kafka into a NetworkEvent and processes it.
     """
+    # Promote nested dissect fields if present (for backwards compatibility or if Filebeat prefixing is active)
+    if "dissect" in raw_event and isinstance(raw_event["dissect"], dict):
+        for k, v in raw_event["dissect"].items():
+            if k not in raw_event:
+                raw_event[k] = v
+
+    # Promote nested fields under event/fields if present
+    if "fields" in raw_event and isinstance(raw_event["fields"], dict):
+        for k, v in raw_event["fields"].items():
+            if isinstance(v, dict):
+                for sub_k, sub_v in v.items():
+                    raw_event[f"{k}.{sub_k}"] = sub_v
+
+    # Map Filebeat/Zeek ECS fields or direct dissected fields to NetworkEvent
+    orig_h = raw_event.get("id.orig_h") or raw_event.get("orig_h")
+    uid = raw_event.get("uid") or raw_event.get("orig_uid")
+    service = raw_event.get("service") or ""
+
+    if orig_h:
+        raw_event["source_ip"] = orig_h
+        raw_event["event_id"] = uid or ""
+        
+        service_str = str(service)
+        if service_str.startswith("auth_"):
+            raw_event["event_source"] = "live_portal"
+            parts = service_str.split("_")
+            if len(parts) >= 3:
+                raw_event["user_id"] = parts[1]
+                raw_event["action"] = "login"
+                raw_event["success"] = (parts[2] == "success")
+                # Simulate anomaly features for AI engine if login failed
+                if not raw_event["success"]:
+                    raw_event["anomaly_type"] = "brute_force"
+                    raw_event["failed_attempts_last_15m"] = 5
+                else:
+                    raw_event["anomaly_type"] = "None"
+                    raw_event["failed_attempts_last_15m"] = 0
+        else:
+            raw_event["event_source"] = "replayed_dataset"
+            raw_event["action"] = "connection"
+            resp_bytes = raw_event.get("resp_bytes") or raw_event.get("resp_ip_bytes") or 0
+            try:
+                raw_event["data_downloaded_mb"] = float(resp_bytes) / (1024 * 1024)
+            except Exception:
+                raw_event["data_downloaded_mb"] = 0.0
+
+    # Safety fallback: classify any auth_ events as live_portal
+    service_str = str(raw_event.get("service") or "")
+    if service_str.startswith("auth_"):
+        raw_event["event_source"] = "live_portal"
+        if not raw_event.get("user_id"):
+            parts = service_str.split("_")
+            if len(parts) >= 2:
+                raw_event["user_id"] = parts[1]
+
+    # Detect VPN indicator on raw events
+    is_vpn = raw_event.get("is_vpn") or False
+    service_str = str(raw_event.get("service", ""))
+    user_id_str = str(raw_event.get("user_id", ""))
+    if "vpn" in service_str.lower() or "vpn" in user_id_str.lower() or "vpn" in str(raw_event.get("username", "")).lower():
+        is_vpn = True
+    src_ip = str(raw_event.get("source_ip", ""))
+    if src_ip.startswith("45.") or src_ip.startswith("82.") or src_ip.startswith("185."):
+        is_vpn = True
+    raw_event["is_vpn"] = is_vpn
+
     event_fields = {k: v for k, v in raw_event.items()
                     if k in NetworkEvent.model_fields}
     event = NetworkEvent(**event_fields)
@@ -244,6 +365,11 @@ def process_event(event: NetworkEvent) -> PredictionResult:
     ai_latency = (time.time() - ai_t0) * 1000
 
     threat_action = determine_action(ensemble_score)
+
+    # Generate dynamic threat reasons
+    threat_reasons = []
+    if is_threat:
+        threat_reasons = _determine_threat_reasons(event_dict, ensemble_score, threshold)
 
     stages.append(PipelineStageResult(
         stage_name="AI Detection Engine",
@@ -394,6 +520,7 @@ def process_event(event: NetworkEvent) -> PredictionResult:
             "ip_region": event_dict.get("ip_region", ""),
             "user": event_dict.get("user_id", ""),
             "action": event_dict.get("action", ""),
+            "event_source": event_dict.get("event_source", "replayed_dataset"),
             "xgb_score": round(xgb_score, 6),
             "lgb_score": round(lgb_score, 6),
             "ensemble_score": round(ensemble_score, 6),
@@ -492,6 +619,9 @@ def process_event(event: NetworkEvent) -> PredictionResult:
                 "failed_attempts_last_15m": event_dict.get("failed_attempts_last_15m", 0),
                 "data_downloaded_mb":       event_dict.get("data_downloaded_mb", 0),
                 "impossible_travel":        event_dict.get("impossible_travel", False),
+                "event_source":             event_dict.get("event_source", "replayed_dataset"),
+                "threat_reasons":           threat_reasons,
+                "is_vpn":                   event_dict.get("is_vpn", False),
             },
             pipeline_stages=stages_dicts,
             source_geo=src_geo,
@@ -528,5 +658,8 @@ def process_event(event: NetworkEvent) -> PredictionResult:
             "anomaly_type": event_dict.get("anomaly_type", ""),
             "geo_mismatch": event_dict.get("geo_mismatch", False),
             "alert_id":     alert_id,
+            "event_source": event_dict.get("event_source", "replayed_dataset"),
+            "threat_reasons": threat_reasons,
+            "is_vpn":       event_dict.get("is_vpn", False),
         },
     )

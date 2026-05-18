@@ -139,18 +139,42 @@ export function renderDashboard(containerId) {
             </div>
         </div>
 
-        <!-- Right Column: Threat Feed -->
-        <div style="flex: 2;">
-            <div class="threat-feed" id="threat-feed" style="height: 100%;">
-              <div class="threat-feed-header">
-                <span class="threat-feed-title">Live Threat Feed</span>
-                <span class="live-badge">LIVE</span>
-              </div>
-              <div id="threat-feed-list">
-                <div style="text-align: center; color: var(--text-muted); font-family: var(--font-mono); font-size: 12px; padding: var(--space-lg);">
-                  No threats detected yet
+        <!-- Right Column: Dual Threat Feed -->
+        <div style="flex: 2; display: flex; flex-direction: column; gap: var(--space-md);">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 14px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.5px;">Threat Feeds</span>
+                <select id="threat-feed-filter" class="vault-filter-select" style="width: auto; padding: 4px 8px; background: rgba(20, 20, 25, 0.8);">
+                    <option value="all">All Logs</option>
+                    <option value="replayed">Replayed Dataset Only</option>
+                    <option value="live">Live Portal Logins Only</option>
+                </select>
+            </div>
+            <div style="display: flex; gap: var(--space-xl); flex: 1;">
+                <!-- Left Sub-column: Replayed Dataset -->
+                <div class="threat-feed" id="threat-feed-replayed" style="flex: 1; height: 100%;">
+                  <div class="threat-feed-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                    <span class="threat-feed-title" style="font-size: 14px; font-weight: 600; letter-spacing: 0.5px;">📊 Replayed Dataset Threats</span>
+                    <span class="live-badge" style="background: rgba(0, 169, 130, 0.1); color: var(--cyan); font-size: 8px; padding: 2px 6px; border-radius: 4px;">ACTIVE</span>
+                  </div>
+                  <div id="threat-feed-replayed-list" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div style="text-align: center; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; padding: var(--space-lg);">
+                      No replayed threats yet
+                    </div>
+                  </div>
                 </div>
-              </div>
+
+                <!-- Right Sub-column: Live Portal Logins -->
+                <div class="threat-feed" id="threat-feed-live" style="flex: 1; height: 100%; border-left: 1px solid var(--border-color); padding-left: 20px;">
+                  <div class="threat-feed-header" style="border-bottom: 1px solid var(--border-color); padding-bottom: 8px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                    <span class="threat-feed-title" style="font-size: 14px; font-weight: 600; letter-spacing: 0.5px;">🌐 Live Portal Logins</span>
+                    <span class="live-badge" style="background: rgba(233, 69, 96, 0.15); color: var(--magenta); font-size: 8px; padding: 2px 6px; border-radius: 4px; animation: pulse 2s infinite;">LIVE PORTAL</span>
+                  </div>
+                  <div id="threat-feed-live-list" style="display: flex; flex-direction: column; gap: 8px;">
+                    <div style="text-align: center; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; padding: var(--space-lg);">
+                      No live login events yet
+                    </div>
+                  </div>
+                </div>
             </div>
         </div>
         
@@ -263,6 +287,7 @@ export function renderDashboard(containerId) {
 
   // Setup search/filter listeners
   setupVaultTableFilters();
+  setupThreatFeedFilter();
 
   // Initialize dashboard counters from backend metrics (persist across reloads)
   initDashboardFromBackend();
@@ -309,11 +334,13 @@ async function initDashboardFromBackend() {
         const feedData = await feedRes.json();
         if (feedData.threats && feedData.threats.length > 0) {
           state.threatFeed = feedData.threats.map(t => ({
+            is_threat: true,
             threat_score: t.threat_score,
             event_summary: {
               user: t.user,
               source_ip: t.source_ip,
               anomaly_type: t.attack_type,
+              event_source: t.event_source || 'replayed_dataset',
             },
             time: new Date(t.timestamp).toLocaleTimeString(),
           }));
@@ -338,6 +365,8 @@ export function updateDashboard(prediction) {
   state.latencySum += prediction.total_latency_ms || 0;
   state.avgLatency = state.latencySum / state.totalProcessed;
 
+  const isLivePortal = (prediction.event_summary?.event_source === 'live_portal');
+
   if (prediction.is_threat) {
     state.totalThreats++;
     state.totalBlocked++;
@@ -347,15 +376,17 @@ export function updateDashboard(prediction) {
     if (!state.attackTypes[aType]) state.attackTypes[aType] = 0;
     state.attackTypes[aType]++;
     updateAttackBreakdown();
+  } else {
+    state.totalAllowed++;
+  }
 
-    // Add to threat feed
+  // Always add to threat feed if it is a threat OR from live portal
+  if (prediction.is_threat || isLivePortal) {
     state.threatFeed.unshift({
       ...prediction,
       time: new Date().toLocaleTimeString(),
     });
-    if (state.threatFeed.length > 30) state.threatFeed.pop();
-  } else {
-    state.totalAllowed++;
+    if (state.threatFeed.length > 50) state.threatFeed.pop();
   }
 
   // Update metric cards
@@ -582,6 +613,32 @@ function setupVaultTableFilters() {
     statusFilter?.addEventListener('change', applyFilters);
 }
 
+function setupThreatFeedFilter() {
+    const feedFilter = document.getElementById('threat-feed-filter');
+    feedFilter?.addEventListener('change', (e) => {
+        const val = e.target.value;
+        const replayedCol = document.getElementById('threat-feed-replayed');
+        const liveCol = document.getElementById('threat-feed-live');
+        
+        if (!replayedCol || !liveCol) return;
+
+        if (val === 'all') {
+            replayedCol.style.display = 'block';
+            liveCol.style.display = 'block';
+            liveCol.style.borderLeft = '1px solid var(--border-color)';
+            liveCol.style.paddingLeft = '20px';
+        } else if (val === 'replayed') {
+            replayedCol.style.display = 'block';
+            liveCol.style.display = 'none';
+        } else if (val === 'live') {
+            replayedCol.style.display = 'none';
+            liveCol.style.display = 'block';
+            liveCol.style.borderLeft = 'none';
+            liveCol.style.paddingLeft = '0';
+        }
+    });
+}
+
 function updateAttackBreakdown() {
     const container = document.getElementById('attack-breakdown');
     if (!container) return;
@@ -609,27 +666,73 @@ export async function updateModelMetrics() {
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 function updateThreatFeed() {
-  const list = document.getElementById('threat-feed-list');
-  if (!list) return;
+  const replayedList = document.getElementById('threat-feed-replayed-list');
+  const liveList = document.getElementById('threat-feed-live-list');
+  if (!replayedList || !liveList) return;
 
-  if (state.threatFeed.length === 0) return;
+  const replayedEvents = state.threatFeed.filter(t => (t.event_summary?.event_source || 'replayed_dataset') !== 'live_portal');
+  const liveEvents = state.threatFeed.filter(t => t.event_summary?.event_source === 'live_portal');
 
-  list.innerHTML = state.threatFeed.slice(0, 20).map(threat => {
-    const severity = threat.threat_score > 0.9 ? 'critical' : 'high';
-    const summary = threat.event_summary || {};
-    const aType = summary.anomaly_type && summary.anomaly_type !== 'None' ? summary.anomaly_type : 'BLOCK';
-    return `
-      <div class="threat-item ${severity}">
-        <span class="event-badge ${severity === 'critical' ? 'critical' : 'block'}">
-          ${aType}
-        </span>
-        <span style="color: var(--text-primary); min-width: 100px;">${summary.user || 'unknown'}</span>
-        <span style="color: var(--cyan-dim); min-width: 90px;">${summary.source_ip || '--'}</span>
-        <span style="color: var(--magenta); min-width: 60px;">${((threat.threat_score || 0) * 100).toFixed(1)}%</span>
-        <span style="color: var(--text-muted); min-width: 70px;">${threat.time}</span>
+  // Render Replayed
+  if (replayedEvents.length > 0) {
+    replayedList.innerHTML = replayedEvents.slice(0, 15).map(threat => {
+      const severity = threat.threat_score > 0.9 ? 'critical' : 'high';
+      const summary = threat.event_summary || {};
+      const aType = summary.anomaly_type && summary.anomaly_type !== 'None' ? summary.anomaly_type : 'BLOCK';
+      
+      return `
+        <div class="threat-item ${severity}" style="margin-bottom: 4px; font-size: 11px;">
+          <span class="event-badge ${severity === 'critical' ? 'critical' : 'block'}" style="font-size: 9px; padding: 2px 4px;">
+            ${aType}
+          </span>
+          <span style="color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80px;">${summary.user || 'unknown'}</span>
+          <span style="color: var(--cyan-dim); font-family: var(--font-mono);">${summary.source_ip || '--'}</span>
+          <span style="color: var(--magenta); font-weight: 600;">${((threat.threat_score || 0) * 100).toFixed(1)}%</span>
+          <span style="color: var(--text-muted); font-size: 10px; margin-left: auto;">${threat.time}</span>
+        </div>
+      `;
+    }).join('');
+  } else {
+    replayedList.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; padding: var(--space-lg);">
+        No replayed threats yet
       </div>
     `;
-  }).join('');
+  }
+
+  // Render Live
+  if (liveEvents.length > 0) {
+    liveList.innerHTML = liveEvents.slice(0, 15).map(threat => {
+      const isThreat = threat.is_threat || threat.threat_score >= 0.6;
+      const isCritical = threat.threat_action === 'CRITICAL_ALERT';
+      const severity = isCritical ? 'critical' : isThreat ? 'high' : 'safe';
+      const summary = threat.event_summary || {};
+      
+      const badgeClass = severity === 'critical' ? 'critical' : severity === 'high' ? 'block' : 'allow';
+      const badgeLabel = severity === 'critical' ? 'CRITICAL' : severity === 'high' ? 'BLOCKED' : 'ALLOWED';
+      
+      const scoreColor = isThreat ? 'var(--magenta)' : 'var(--lime)';
+      const scorePercent = ((threat.threat_score || 0) * 100).toFixed(1);
+
+      return `
+        <div class="threat-item ${severity === 'safe' ? 'safe' : severity}" style="margin-bottom: 4px; font-size: 11px; background: ${isThreat ? 'rgba(233, 69, 96, 0.05)' : 'rgba(1, 169, 130, 0.05)'}; border-left: 3px solid ${isThreat ? 'var(--magenta)' : 'var(--cyan)'};">
+          <span class="event-badge ${badgeClass}" style="font-size: 8px; padding: 2px 4px; font-family: var(--font-mono);">
+            ${badgeLabel}
+          </span>
+          <span style="color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 80px;">${summary.user || 'unknown'}</span>
+          <span style="color: var(--cyan-dim); font-family: var(--font-mono);">${summary.source_ip || '--'}</span>
+          <span style="color: ${scoreColor}; font-weight: 700;">${scorePercent}%</span>
+          <span style="color: var(--text-muted); font-size: 10px; margin-left: auto;">${threat.time}</span>
+        </div>
+      `;
+    }).join('');
+  } else {
+    liveList.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; padding: var(--space-lg);">
+        No live login events yet
+      </div>
+    `;
+  }
 }
 
 function updateElement(id, value) {
