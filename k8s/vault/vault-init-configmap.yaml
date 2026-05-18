@@ -8,17 +8,11 @@ metadata:
 data:
   init-vault.sh: |
     #!/bin/sh
-    # vault/init/init-vault.sh (K8s version)
-    # Phase 1: Initialize + unseal Vault, create KV v2 + hpe-dev-token
-    # Phase 2: Configure database secrets engine against PostgreSQL
-    # Phase 3: Create AppRole auth — backend gets role_id + secret_id
-
     VAULT_ADDR="http://vault.hpe.svc.cluster.local:8200"
     INIT_FILE="/vault/data/.initialized"
     DB_ENGINE_FILE="/vault/data/.db_engine_configured"
     APPROLE_FILE="/vault/data/.approle_configured"
 
-    # ── Wait for Vault HTTP API ─────────────────────────────────────────────
     echo ">>> Waiting for Vault API to be reachable..."
     i=0
     while [ $i -lt 60 ]; do
@@ -32,8 +26,9 @@ data:
       sleep 3
     done
     echo ">>> Vault API reachable."
+    echo ">>> Waiting 10s for Vault to fully boot..."
+    sleep 10
 
-    # ── Initialize or unseal ────────────────────────────────────────────────
     HEALTH=$(wget -qO- "$VAULT_ADDR/v1/sys/health" 2>/dev/null || echo '{}')
     INITIALIZED=$(echo "$HEALTH" | grep -o '"initialized":[a-z]*' | grep -o '[a-z]*$')
     echo ">>> Initialized: $INITIALIZED"
@@ -49,10 +44,29 @@ data:
       echo ">>> Unsealed."
     else
       echo ">>> First-time initialization..."
-      INIT_RESPONSE=$(wget -qO- \
-        --header="Content-Type: application/json" \
-        --post-data='{"secret_shares":1,"secret_threshold":1}' \
-        "$VAULT_ADDR/v1/sys/init")
+      echo ">>> Attempting Vault initialization..."
+      INIT_RESPONSE=""
+      attempts=0
+      while [ $attempts -lt 5 ]; do
+        INIT_RESPONSE=$(wget -qO- \
+          --header="Content-Type: application/json" \
+          --post-data='{"secret_shares":1,"secret_threshold":1}' \
+          "$VAULT_ADDR/v1/sys/init" 2>/dev/null)
+        if echo "$INIT_RESPONSE" | grep -q "root_token"; then
+          echo ">>> Init request succeeded."
+          break
+        fi
+        attempts=$((attempts+1))
+        echo "    Init attempt $attempts failed, retrying in 5s..."
+        echo "    Response was: $INIT_RESPONSE"
+        sleep 5
+      done
+
+      if ! echo "$INIT_RESPONSE" | grep -q "root_token"; then
+        echo "ERROR: Vault init failed after 5 attempts"
+        echo "Last response: $INIT_RESPONSE"
+        exit 1
+      fi
 
       UNSEAL_KEY=$(echo "$INIT_RESPONSE" | grep -o '"keys_base64":\["[^"]*"' | cut -d'"' -f4)
       ROOT_TOKEN=$(echo "$INIT_RESPONSE" | grep -o '"root_token":"[^"]*"' | cut -d'"' -f4)
@@ -81,7 +95,7 @@ data:
         --post-data='{"type":"kv","options":{"version":"2"}}' \
         "$VAULT_ADDR/v1/sys/mounts/secret" > /dev/null
 
-      echo ">>> Creating hpe-dev-token (legacy fallback)..."
+      echo ">>> Creating hpe-dev-token..."
       wget -qO- \
         --header="Content-Type: application/json" \
         --header="X-Vault-Token: $ROOT_TOKEN" \
@@ -93,14 +107,9 @@ data:
 
     ROOT_TOKEN=$(cat /vault/data/.root_token)
 
-    # ── Wait for PostgreSQL before configuring database engine ─────────────
     echo ">>> Waiting for PostgreSQL..."
     i=0
     while [ $i -lt 30 ]; do
-      if wget -qO- "http://postgres.hpe.svc.cluster.local:5432" 2>&1 | grep -q ""; then
-        # pg_isready equivalent via nc
-        nc -z postgres.hpe.svc.cluster.local 5432 2>/dev/null && break
-      fi
       nc -z postgres.hpe.svc.cluster.local 5432 2>/dev/null && break
       echo "    PostgreSQL not ready, attempt $i/30"
       i=$((i+1))
@@ -108,7 +117,6 @@ data:
     done
     echo ">>> PostgreSQL reachable."
 
-    # ── Phase 2: Database Secrets Engine ───────────────────────────────────
     if [ -f "$DB_ENGINE_FILE" ]; then
       echo ">>> Database secrets engine already configured. Skipping."
     else
@@ -132,7 +140,7 @@ data:
         }' \
         "$VAULT_ADDR/v1/database/config/hpe-postgres" > /dev/null
 
-      echo ">>> Creating hpe-backend-role (read/write, TTL=1h)..."
+      echo ">>> Creating hpe-backend-role..."
       wget -qO- \
         --header="Content-Type: application/json" \
         --header="X-Vault-Token: $ROOT_TOKEN" \
@@ -153,7 +161,7 @@ data:
         }' \
         "$VAULT_ADDR/v1/database/roles/hpe-backend-role" > /dev/null
 
-      echo ">>> Creating hpe-readonly-role (read only, TTL=30m)..."
+      echo ">>> Creating hpe-readonly-role..."
       wget -qO- \
         --header="Content-Type: application/json" \
         --header="X-Vault-Token: $ROOT_TOKEN" \
@@ -177,9 +185,8 @@ data:
       echo ">>> Database secrets engine configured."
     fi
 
-    # ── Phase 3: AppRole Auth ─────────────────────────────────────────────
     if [ -f "$APPROLE_FILE" ]; then
-      echo ">>> AppRole already configured. Reading existing credentials..."
+      echo ">>> AppRole already configured."
       ROLE_ID=$(cat /vault/data/.approle_role_id)
       SECRET_ID=$(cat /vault/data/.approle_secret_id)
     else
@@ -192,7 +199,7 @@ data:
         }' \
         "$VAULT_ADDR/v1/sys/policies/acl/hpe-backend-policy" > /dev/null
 
-      echo ">>> Enabling AppRole auth method..."
+      echo ">>> Enabling AppRole auth..."
       wget -qO- \
         --header="Content-Type: application/json" \
         --header="X-Vault-Token: $ROOT_TOKEN" \
@@ -228,23 +235,15 @@ data:
 
       if [ -z "$ROLE_ID" ] || [ -z "$SECRET_ID" ]; then
         echo "ERROR: Failed to parse role_id or secret_id"
-        echo "Role response: $ROLE_RESP"
-        echo "Secret response: $SECRET_RESP"
         exit 1
       fi
 
       echo "$ROLE_ID" > /vault/data/.approle_role_id
       echo "$SECRET_ID" > /vault/data/.approle_secret_id
       touch "$APPROLE_FILE"
-
       echo ">>> AppRole configured."
     fi
 
-    echo ""
-    echo ">>> role_id:    $ROLE_ID"
-    echo ">>> secret_id:  $SECRET_ID"
-
-    # Write credentials file for backend to read
     cat > /vault/data/.approle_credentials << CREDS
     VAULT_ROLE_ID=$ROLE_ID
     VAULT_SECRET_ID=$SECRET_ID
@@ -253,11 +252,5 @@ data:
     echo ""
     echo "=========================================="
     echo "  Vault fully ready! (Phase 1+2+3)"
-    echo "  - KV v2 at secret/"
-    echo "  - Database engine at database/"
-    echo "  - hpe-backend-role: read/write, TTL=1h"
-    echo "  - hpe-readonly-role: read only, TTL=30m"
-    echo "  - AppRole: hpe-backend"
-    echo "  - Policy: hpe-backend-policy"
-    echo "  - Credentials: /vault/data/.approle_credentials"
     echo "=========================================="
+        

@@ -13,3 +13,4 @@ hvac==2.3.0
 websockets==12.0
 python-multipart==0.0.9
 psycopg2-binary==2.9.9
+redis==5.0.1

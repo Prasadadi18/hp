@@ -1,7 +1,8 @@
-version: '3.8'
+#version: '3.8'
 
 services:
   # ── Apache Kafka (KRaft mode — Official Apache Image) ──
+
   kafka:
     image: apache/kafka:3.7.0
     container_name: hpe-kafka
@@ -234,6 +235,18 @@ services:
       - backend
     networks:
       - hpe-network
+redis:
+  image: redis:7-alpine
+  container_name: hpe-redis
+  ports:
+    - "6379:6379"
+  networks:
+    - hpe-network
+  healthcheck:
+    test: [ "CMD", "redis-cli", "ping" ]
+    interval: 10s
+    timeout: 5s
+    retries: 5
 
   # ── Live Replay: Streams dataset conn.log as live traffic ──
   # Reads dataset/zeek/conn.log and writes it line-by-line to
@@ -305,7 +318,6 @@ volumes:
   kibana_data:
   vault_data:
   postgres_data:
-
 
 networks:
   hpe-network:

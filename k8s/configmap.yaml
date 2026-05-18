@@ -25,3 +25,5 @@ data:
 
   # AppRole credentials file (shared vault-data PVC)
   VAULT_APPROLE_CREDS_FILE: "/vault/data/.approle_credentials"
+  # redis url 
+  REDIS_URL: "redis://redis.hpe.svc.cluster.local:6379"
