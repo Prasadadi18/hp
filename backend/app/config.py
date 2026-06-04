@@ -62,3 +62,6 @@ SERVER_LOCATION = {"lat": 12.97, "lng": 77.59, "city": "Bangalore, India"}
 APP_NAME = "HPE"
 APP_TAGLINE = "HPE by project interns"
 APP_VERSION = "1.0.0"
+
+# ── GitHub repository ──────────────────────────────────────────────────────────
+GITHUB_REPO = os.getenv("GITHUB_REPO", "cheeseburden/hp")

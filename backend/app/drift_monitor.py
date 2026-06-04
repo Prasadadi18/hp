@@ -3,7 +3,7 @@ import asyncio
 import urllib.request
 import json
 from typing import Optional
-from app import elastic_client, vault_client
+from app import elastic_client, vault_client, config
 
 logger = logging.getLogger("hpe.drift_monitor")
 
@@ -74,7 +74,7 @@ async def trigger_github_retraining(fpr: float, total_alerts: int):
         logger.error("[Drift Monitor] GITHUB_PAT not found in Vault or Environment — cannot trigger retraining")
         return
 
-    repo = "Prasadadi18/hp"
+    repo = config.GITHUB_REPO
     url = f"https://api.github.com/repos/{repo}/dispatches"
 
     headers = {

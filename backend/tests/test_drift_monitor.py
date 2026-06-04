@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import drift_monitor
+from app import drift_monitor, config
 
 
 class TestDriftMonitor:
@@ -84,7 +84,7 @@ class TestDriftMonitor:
             await drift_monitor.trigger_github_retraining(0.25, 8)
             mock_send.assert_called_once()
             args, kwargs = mock_send.call_args
-            assert args[0] == "https://api.github.com/repos/Prasadadi18/hp/dispatches"
+            assert args[0] == f"https://api.github.com/repos/{config.GITHUB_REPO}/dispatches"
             assert "Authorization" in args[1]
             assert args[1]["Authorization"] == "Bearer mock-token"
             assert args[2]["event_type"] == "ml_drift_detected"
