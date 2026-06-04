@@ -8,11 +8,12 @@ import logging
 import hashlib
 import secrets
 import time
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Header, HTTPException, Depends
 from pydantic import BaseModel
 from app.schemas import ApprovalRequest, ApprovalResponse
 
 from app import admin_store, vault_client, vault_infra_client
+from app.config import ADMIN_SECRET
 from app.ws_manager import admin_manager
 
 class RegistrationApproval(BaseModel):
@@ -20,9 +21,16 @@ class RegistrationApproval(BaseModel):
 
 logger = logging.getLogger("hpe.admin")
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-# Store pending reset tokens
+
+def verify_admin(x_admin_secret: str = Header(default="")):
+    if x_admin_secret != ADMIN_SECRET:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid admin secret"
+        )
+
 _pending_reset_tokens = {}
-_RESET_TOKEN_TTL = 30  # seconds
+_RESET_TOKEN_TTL = 30
 
 
 def _determine_affected_service(event_data: dict) -> str:
@@ -68,7 +76,7 @@ async def get_alert_detail(alert_id: str):
 
 
 @router.post("/alerts/{alert_id}/approve", response_model=ApprovalResponse)
-async def approve_alert(alert_id: str, request: ApprovalRequest):
+async def approve_alert(alert_id: str, request: ApprovalRequest,_: None = Depends(verify_admin)):
     """
     Approve credential rotation for a threat alert.
 
@@ -213,7 +221,7 @@ async def approve_alert(alert_id: str, request: ApprovalRequest):
 
 
 @router.post("/alerts/{alert_id}/reject", response_model=ApprovalResponse)
-async def reject_alert(alert_id: str, request: ApprovalRequest):
+async def reject_alert(alert_id: str, request: ApprovalRequest,_: None = Depends(verify_admin)):
     alert = admin_store.reject_alert(alert_id, admin_notes=request.admin_notes)
     if not alert:
         return ApprovalResponse(
@@ -319,7 +327,7 @@ class ResetRequest(BaseModel):
 
 
 @router.post("/reset/request")
-async def request_reset_token():
+async def request_reset_token(_: None = Depends(verify_admin)):
     """Issue a short-lived token required to confirm a reset."""
 
     token = secrets.token_hex(16)
@@ -337,7 +345,7 @@ async def request_reset_token():
         "expires_in_seconds": _RESET_TOKEN_TTL,
     }
 @router.post("/reset")
-async def reset_pipeline(request: ResetRequest):
+async def reset_pipeline(request: ResetRequest,_: None = Depends(verify_admin)):
     """Wipe all pipeline state and start fresh."""
     # Validate token
     token = request.confirm_token
