@@ -6,19 +6,17 @@ Phase 5: Kafka credential rotation via Vault KV + reconnect on CRITICAL_ALERT.
 
 import logging
 import hashlib
-from pydantic import BaseModel
 import secrets
 import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 from app.schemas import ApprovalRequest, ApprovalResponse
 
+from app import admin_store, vault_client, vault_infra_client
+from app.ws_manager import admin_manager
+
 class RegistrationApproval(BaseModel):
     password: str
-
-from app import admin_store, vault_client, vault_infra_client
-
-from app.ws_manager import admin_manager
 
 logger = logging.getLogger("hpe.admin")
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -318,6 +316,8 @@ async def reject_registration(username: str):
 
 class ResetRequest(BaseModel):
     confirm_token: str = ""
+
+
 @router.post("/reset/request")
 async def request_reset_token():
     """Issue a short-lived token required to confirm a reset."""
@@ -351,7 +351,6 @@ async def reset_pipeline(request: ResetRequest):
 
     try:
         from app import db, elastic_client, kafka_client
-        import time
 
         # 1. Truncate all hpe_* Postgres tables and reset stats
         logger.warning("[FRESH RESTART] Wiping PostgreSQL state")

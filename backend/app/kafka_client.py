@@ -14,7 +14,10 @@ import logging
 import threading
 import asyncio
 from typing import Optional, Callable, Dict, Any
+
+# pyrefly: ignore [missing-import]
 from confluent_kafka import Producer, Consumer, KafkaError, KafkaException
+# pyrefly: ignore [missing-import]
 from confluent_kafka.admin import AdminClient, NewTopic
 from app.config import KAFKA_BOOTSTRAP_SERVERS, KAFKA_RAW_EVENTS_TOPIC, KAFKA_ALERTS_TOPIC, KAFKA_AUDIT_TOPIC
 
@@ -356,6 +359,7 @@ def get_topic_stats() -> Dict[str, Any]:
                 "partition_count": len(partitions),
             }
 
+        # pyrefly: ignore [missing-import]
         from confluent_kafka import TopicPartition
         stats_consumer = Consumer({
             "bootstrap.servers": KAFKA_BOOTSTRAP_SERVERS,
