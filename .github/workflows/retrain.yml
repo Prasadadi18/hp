@@ -1,0 +1,64 @@
+# ============================================================================
+# HPE Enterprise Threat Detection — Automated Model Retraining Workflow
+# ============================================================================
+# Triggers on repository_dispatch event "ml_drift_detected".
+# Pulls datasets (via DVC), retrains the ensemble model, and commits the
+# updated model artifacts back to the repository.
+# ============================================================================
+
+name: Model Retraining Loop
+
+on:
+  repository_dispatch:
+    types: [ml_drift_detected]
+
+env:
+  PYTHON_VERSION: "3.11"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  retrain:
+    name: "🤖 Automated ML Retraining"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-retrain-${{ hashFiles('backend/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-retrain-
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install xgboost lightgbm scikit-learn imbalanced-learn mlflow joblib pandas numpy
+
+      - name: DVC Pull
+        run: |
+          pip install dvc
+          dvc pull || true
+
+      - name: Run Retraining Script
+        run: |
+          python export_v2_model.py
+        env:
+          MLFLOW_TRACKING_URI: sqlite:///mlflow.db
+
+      - name: Commit and Push Retrained Model
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add model_output/pipeline_artifacts_v2.joblib model_output/user_profiles.json model_output/test_events.json model_output/classification_report.txt
+          git commit -m "Auto-retrain: Model updated due to drift detection (FPR=${{ github.event.client_payload.false_positive_rate }})" || exit 0
+          git push origin main

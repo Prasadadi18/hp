@@ -549,6 +549,22 @@ def _generate_api_key() -> str:
     return f"hpe_{secrets.token_hex(24)}"
 
 
+def get_github_pat() -> Optional[str]:
+    import os
+    if not _client or not _connected:
+        return os.getenv("GITHUB_PAT")
+    try:
+        response = _client.secrets.kv.v2.read_secret_version(
+            path="hpe/github",
+            raise_on_deleted_version=False,
+        )
+        data = response.get("data", {}).get("data", {})
+        if data and "token" in data:
+            return data["token"]
+    except Exception as e:
+        logger.warning(f"Vault: Failed to read GITHUB_PAT ({e}) — falling back to environment variable")
+    return os.getenv("GITHUB_PAT")
+
 def disconnect_vault():
     global _connected, _renewal_stop_event
     _renewal_stop_event.set()   # stop renewal thread cleanly

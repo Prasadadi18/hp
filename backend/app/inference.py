@@ -23,6 +23,12 @@ _is_loaded = False
 
 _user_profiles = {}
 
+import os
+try:
+    import redis
+except ImportError:
+    redis = None
+
 # Stateful tracking for rolling features
 _user_history = defaultdict(lambda: {
     "first_seen_ip": None,
@@ -33,6 +39,68 @@ _user_history = defaultdict(lambda: {
     "failed_30m": 0,
     "events_1h": 0
 })
+
+_redis_client = None
+_redis_initialized = False
+
+def _get_redis():
+    global _redis_client, _redis_initialized
+    if not _redis_initialized:
+        if redis is None:
+            logger.warning("[Inference] Redis module not installed — using local in-memory fallback")
+            _redis_client = None
+        else:
+            try:
+                redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
+                _redis_client = redis.from_url(redis_url, decode_responses=True)
+                _redis_client.ping()
+                logger.info(f"[Inference] Connected to Redis at {redis_url}")
+            except Exception as e:
+                logger.warning(f"[Inference] Redis not available ({e}) — using local in-memory fallback")
+                _redis_client = None
+        _redis_initialized = True
+    return _redis_client
+
+def get_user_history(user_id: str) -> dict:
+    r = _get_redis()
+    if r:
+        try:
+            key = f"hpe:user_history:{user_id}"
+            data = r.hgetall(key)
+            if data:
+                return {
+                    "first_seen_ip": data.get("first_seen_ip") or None,
+                    "prev_ip": data.get("prev_ip") or None,
+                    "last_event_time": pd.to_datetime(data["last_event_time"]) if data.get("last_event_time") else None,
+                    "ip_hops_30m": int(data.get("ip_hops_30m", 0)),
+                    "admin_actions_15m": int(data.get("admin_actions_15m", 0)),
+                    "failed_30m": int(data.get("failed_30m", 0)),
+                    "events_1h": int(data.get("events_1h", 0))
+                }
+        except Exception as e:
+            logger.error(f"Redis get_user_history error: {e}")
+    return _user_history[user_id]
+
+def save_user_history(user_id: str, hist: dict):
+    r = _get_redis()
+    if r:
+        try:
+            key = f"hpe:user_history:{user_id}"
+            serialized = {
+                "first_seen_ip": hist["first_seen_ip"] or "",
+                "prev_ip": hist["prev_ip"] or "",
+                "last_event_time": hist["last_event_time"].isoformat() if hasattr(hist["last_event_time"], "isoformat") else (hist["last_event_time"] or ""),
+                "ip_hops_30m": str(hist["ip_hops_30m"]),
+                "admin_actions_15m": str(hist["admin_actions_15m"]),
+                "failed_30m": str(hist["failed_30m"]),
+                "events_1h": str(hist["events_1h"])
+            }
+            r.hset(key, mapping=serialized)
+            r.expire(key, 3600)  # 1 hour TTL
+            return
+        except Exception as e:
+            logger.error(f"Redis save_user_history error: {e}")
+    _user_history[user_id] = hist
 
 def load_model(model_path: str):
     """Load the v2 ML models, artifacts, and user profiles."""
@@ -187,7 +255,7 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         df['very_high_failed'] = int(df['failed_attempts_last_15m'].iloc[0] >= 8)
         df['success_int'] = int(df['success'].iloc[0])
         
-        hist = _user_history[user_id]
+        hist = get_user_history(user_id)
         
         # New IP?
         if hist["first_seen_ip"] is None:
@@ -215,7 +283,14 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         if hist["last_event_time"] is None:
             time_since_last = 0.0
         else:
-            time_since_last = (timestamp - hist["last_event_time"]).total_seconds()
+            # Handle potential pandas Timestamp or offset-naive/aware datetime mismatch
+            last_time = pd.to_datetime(hist["last_event_time"])
+            curr_time = pd.to_datetime(timestamp)
+            if last_time.tzinfo is not None and curr_time.tzinfo is None:
+                curr_time = curr_time.tz_localize(last_time.tzinfo)
+            elif last_time.tzinfo is None and curr_time.tzinfo is not None:
+                last_time = last_time.tz_localize(curr_time.tzinfo)
+            time_since_last = (curr_time - last_time).total_seconds()
         hist["last_event_time"] = timestamp
         
         df['time_since_last'] = time_since_last
@@ -223,6 +298,8 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         
         hist["events_1h"] = min(hist["events_1h"] + 1, 100)
         df['events_1h'] = hist["events_1h"]
+        
+        save_user_history(user_id, hist)
 
         role_risk = {'Admin': 4, 'Developer': 3, 'Finance': 2, 'HR': 1, 'Sales': 1}
         df['role_risk_score'] = role_risk.get(df['role'].iloc[0], 1)

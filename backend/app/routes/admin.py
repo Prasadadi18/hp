@@ -199,6 +199,11 @@ async def approve_alert(alert_id: str, request: ApprovalRequest):
             f"but failed: {infra_rotation_result.get('error', 'unknown')}."
         )
 
+    try:
+        elastic_client.update_threat_resolution(alert["event_id"], "approved")
+    except Exception as e:
+        logger.error(f"Failed to update ES threat resolution: {e}")
+
     return ApprovalResponse(
         success=True,
         alert_id=alert_id,
@@ -227,6 +232,11 @@ async def reject_alert(alert_id: str, request: ApprovalRequest):
             "user_id":  alert["user_id"],
         },
     })
+
+    try:
+        elastic_client.update_threat_resolution(alert["event_id"], "rejected")
+    except Exception as e:
+        logger.error(f"Failed to update ES threat resolution: {e}")
 
     return ApprovalResponse(
         success=True,
