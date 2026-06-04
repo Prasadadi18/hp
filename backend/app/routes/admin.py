@@ -355,7 +355,15 @@ async def reset_pipeline(request: ResetRequest):
 
         # 1. Truncate all hpe_* Postgres tables and reset stats
         logger.warning("[FRESH RESTART] Wiping PostgreSQL state")
-        db.execute_query("TRUNCATE TABLE hpe_admin_alerts, hpe_admin_audit_log, hpe_infra_leases, hpe_credential_rotations CASCADE")
+        db.execute_query("TRUNCATE TABLE hpe_admin_alerts, hpe_infra_leases, hpe_credential_rotations CASCADE")
+        # Audit log is intentionally preserved
+        logger.warning("[RESET] Pipeline state cleared. Audit log preserved (append-only).")
+        
+        from datetime import datetime, timezone
+        db.execute_query(
+            "INSERT INTO hpe_admin_audit_log (action, alert_id, user_id, admin_notes) VALUES (%s, %s, %s, %s)",
+            ("pipeline_reset", "SYSTEM", "admin", f"Pipeline reset performed at {datetime.now(timezone.utc).isoformat()}")
+        )
         db.execute_query("UPDATE hpe_admin_stats SET total_alerts_created=0, total_approved=0, total_rejected=0, total_auto_allowed=0 WHERE id=1")
         db.execute_query("UPDATE hpe_pipeline_metrics SET total_requests=0, total_threats=0, total_allowed=0, total_monitored=0, total_blocked=0, total_critical=0, total_latency_ms=0, attack_types='{}' WHERE id=1")
         db.execute_query("UPDATE hpe_simulation_state SET sim_index=0 WHERE id=1")
