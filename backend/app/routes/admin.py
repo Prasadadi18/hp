@@ -5,13 +5,19 @@ Phase 5: Kafka credential rotation via Vault KV + reconnect on CRITICAL_ALERT.
 """
 
 import logging
+import secrets
+import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel
 from app.schemas import ApprovalRequest, ApprovalResponse
 from app import admin_store, vault_client, vault_infra_client
 from app.ws_manager import admin_manager
 
 logger = logging.getLogger("hpe.admin")
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+# Store pending reset tokens
+_pending_reset_tokens = {}
+_RESET_TOKEN_TTL = 30  # seconds
 
 
 def _determine_affected_service(event_data: dict) -> str:
@@ -255,10 +261,39 @@ async def get_infra_leases():
         "vault_infra_connected": vault_infra_client.is_connected(),
     }
 
+class ResetRequest(BaseModel):
+    confirm_token: str = ""
+@router.post("/reset/request")
+async def request_reset_token():
+    """Issue a short-lived token required to confirm a reset."""
 
+    token = secrets.token_hex(16)
+
+    _pending_reset_tokens[token] = (
+        time.time() + _RESET_TOKEN_TTL
+    )
+
+    logger.warning(
+        "[RESET] Reset token issued — expires in 30s"
+    )
+
+    return {
+        "confirm_token": token,
+        "expires_in_seconds": _RESET_TOKEN_TTL,
+    }
 @router.post("/reset")
-async def reset_pipeline():
+async def reset_pipeline(request: ResetRequest):
     """Wipe all pipeline state and start fresh."""
+    # Validate token
+    token = request.confirm_token
+    expiry = _pending_reset_tokens.get(token)
+    if not expiry or time.time() > expiry:
+        logger.warning("[RESET] Rejected — missing or expired confirm_token")
+        return {"success": False, "message": "Valid confirm_token required. Call /api/admin/reset/request first."}
+    
+    # Consume the token (one-time use)
+    del _pending_reset_tokens[token]
+
     try:
         from app import db, elastic_client, kafka_client
         import time
