@@ -131,5 +131,12 @@ CREATE TABLE IF NOT EXISTS hpe_pipeline_metrics (
 );
 INSERT INTO hpe_pipeline_metrics (id) VALUES (1) ON CONFLICT DO NOTHING;
 
+CREATE TABLE IF NOT EXISTS hpe_simulation_state (
+    id        INTEGER PRIMARY KEY DEFAULT 1,
+    sim_index BIGINT DEFAULT 0,
+    CONSTRAINT single_sim_row CHECK (id = 1)
+);
+INSERT INTO hpe_simulation_state (id) VALUES (1) ON CONFLICT DO NOTHING;
+
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO "vault-root";
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO "vault-root";
