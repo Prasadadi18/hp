@@ -11,7 +11,7 @@ import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Header, HTTPException, Depends
 from pydantic import BaseModel
 from app.schemas import ApprovalRequest, ApprovalResponse
-from app import admin_store, vault_client, vault_infra_client
+from app import admin_store, vault_client, vault_infra_client, elastic_client
 from app.config import ADMIN_SECRET
 from app.ws_manager import admin_manager
 
