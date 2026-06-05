@@ -8,6 +8,7 @@ import os
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9094")
 ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
 VAULT_ADDR = os.getenv("VAULT_ADDR", "http://localhost:8200")
+ADMIN_SECRET = os.getenv("ADMIN_SECRET", "hpe-admin-secret-change-me")
 
 # ── Phase 3: AppRole auth — VAULT_TOKEN is gone ────────────────────────────────
 # The backend no longer uses a long-lived root token.
