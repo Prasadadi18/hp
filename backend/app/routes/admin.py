@@ -13,7 +13,7 @@ from app.schemas import ApprovalRequest, ApprovalResponse
 class RegistrationApproval(BaseModel):
     password: str
 
-from app import admin_store, vault_client, vault_infra_client
+from app import admin_store, vault_client, vault_infra_client, elastic_client
 
 from app.ws_manager import admin_manager
 
