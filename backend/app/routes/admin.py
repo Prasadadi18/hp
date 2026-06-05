@@ -14,6 +14,7 @@ class RegistrationApproval(BaseModel):
     password: str
 
 from app import admin_store, vault_client, vault_infra_client, elastic_client
+from app.config import ADMIN_SECRET
 
 from app.ws_manager import admin_manager
 
