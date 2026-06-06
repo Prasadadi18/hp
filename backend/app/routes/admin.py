@@ -11,8 +11,7 @@ import time
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Header, HTTPException, Depends
 from pydantic import BaseModel
 from app.schemas import ApprovalRequest, ApprovalResponse
-
-from app import admin_store, vault_client, vault_infra_client
+from app import admin_store, vault_client, vault_infra_client, elastic_client
 from app.config import ADMIN_SECRET
 from app.ws_manager import admin_manager
 
@@ -211,6 +210,11 @@ async def approve_alert(alert_id: str, request: ApprovalRequest,_: None = Depend
             f"but failed: {infra_rotation_result.get('error', 'unknown')}."
         )
 
+    try:
+        elastic_client.update_threat_resolution(alert["event_id"], "approved")
+    except Exception as e:
+        logger.error(f"Failed to update ES threat resolution: {e}")
+
     return ApprovalResponse(
         success=True,
         alert_id=alert_id,
@@ -239,6 +243,11 @@ async def reject_alert(alert_id: str, request: ApprovalRequest,_: None = Depends
             "user_id":  alert["user_id"],
         },
     })
+
+    try:
+        elastic_client.update_threat_resolution(alert["event_id"], "rejected")
+    except Exception as e:
+        logger.error(f"Failed to update ES threat resolution: {e}")
 
     return ApprovalResponse(
         success=True,

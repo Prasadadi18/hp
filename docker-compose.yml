@@ -113,7 +113,7 @@ services:
         condition: service_healthy
     networks:
       - hpe-network
-    command: sh -c "sleep 15 && python scripts/es_to_kafka.py --es-url $${ELASTICSEARCH_URL} --kafka-servers $${KAFKA_BOOTSTRAP_SERVERS} --index zeek-conn-* --topic hpe-raw-events --watch --poll-interval 5"
+    command: sh -c "sleep 15 && python scripts/es_to_kafka.py --es-url $${ELASTICSEARCH_URL} --kafka-servers $${KAFKA_BOOTSTRAP_SERVERS} --index zeek-conn-* --topic hpe-raw-events --watch --poll-interval 1"
     restart: on-failure
 
   # ── PostgreSQL (Phase 2 — real DB for Vault dynamic secrets engine) ──
@@ -267,7 +267,7 @@ services:
       python scripts/replay_live.py
         --source /repo/dataset/zeek/conn.log
         --output /repo/dataset/zeek-live/conn.log
-        --rate ${REPLAY_RATE:-50}
+        --rate ${REPLAY_RATE:-2}
         --loop
     depends_on:
       - elasticsearch

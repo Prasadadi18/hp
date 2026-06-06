@@ -56,6 +56,7 @@ THREATS_MAPPING = {
             "ensemble_score": {"type": "float"},
             "vault_rotation_triggered": {"type": "boolean"},
             "credentials_rotated": {"type": "boolean"},
+            "resolution": {"type": "keyword"},
         }
     },
     "settings": {
@@ -205,3 +206,33 @@ def disconnect_elasticsearch():
         _es.close()
     _connected = False
     logger.info("Elasticsearch disconnected")
+
+
+def update_threat_resolution(event_id: str, resolution: str) -> bool:
+    """Update a threat record with the admin resolution status (approved / rejected)."""
+    if not _es or not _connected:
+        return False
+    try:
+        res = _es.search(
+            index=ES_THREATS_INDEX,
+            body={
+                "query": {"term": {"event_id.keyword": event_id}},
+                "size": 1
+            }
+        )
+        hits = res.get("hits", {}).get("hits", [])
+        if hits:
+            doc_id = hits[0]["_id"]
+            _es.update(
+                index=ES_THREATS_INDEX,
+                id=doc_id,
+                body={"doc": {"resolution": resolution}}
+            )
+            logger.info(f"Updated ES threat resolution for event {event_id} to '{resolution}'")
+            return True
+        else:
+            logger.warning(f"Threat record for event {event_id} not found in ES")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to update ES threat resolution: {e}")
+        return False
