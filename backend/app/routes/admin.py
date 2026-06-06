@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from app.schemas import ApprovalRequest, ApprovalResponse
 from app.auth_admin import get_current_admin, create_admin_token, create_reset_token, validate_reset_token, verify_token
 
-from app import admin_store, vault_client, vault_infra_client
+from app import admin_store, vault_client, vault_infra_client, elastic_client
 from app.ws_manager import admin_manager
 
 class RegistrationApproval(BaseModel):
@@ -228,6 +228,11 @@ async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(g
             f"but failed: {infra_rotation_result.get('error', 'unknown')}."
         )
 
+    try:
+        elastic_client.update_threat_resolution(alert["event_id"], "approved")
+    except Exception as e:
+        logger.error(f"Failed to update ES threat resolution: {e}")
+
     return ApprovalResponse(
         success=True,
         alert_id=alert_id,
@@ -259,6 +264,11 @@ async def reject_alert(alert_id: str, request: ApprovalRequest, admin=Depends(ge
             "user_id":  alert["user_id"],
         },
     })
+
+    try:
+        elastic_client.update_threat_resolution(alert["event_id"], "rejected")
+    except Exception as e:
+        logger.error(f"Failed to update ES threat resolution: {e}")
 
     return ApprovalResponse(
         success=True,

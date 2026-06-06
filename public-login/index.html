@@ -3,237 +3,405 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enterprise Portal | HPE</title>
+    <title>Enterprise Access | HPE</title>
+    <!-- Modern premium font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
     <style>
         :root {
-            --bg: #0a0a0a;
-            --surface: #111111;
-            --surface-border: #222222;
-            --primary: #01A982; /* HPE Green */
-            --primary-hover: #008868;
-            --text: #ffffff;
-            --text-muted: #888888;
-            --danger: #ff4a4a;
+            --bg-color: #030305;
+            --primary: #01A982;
+            --primary-glow: rgba(1, 169, 130, 0.4);
+            --surface: rgba(15, 15, 20, 0.6);
+            --surface-border: rgba(255, 255, 255, 0.08);
+            --text-main: #ffffff;
+            --text-muted: #8a8a93;
+            --input-bg: rgba(0, 0, 0, 0.3);
+            --danger: #ff3366;
+            --danger-glow: rgba(255, 51, 102, 0.2);
         }
 
         * {
             box-sizing: border-box;
             margin: 0;
             padding: 0;
-            font-family: 'Inter', -apple-system, sans-serif;
+            font-family: 'Outfit', sans-serif;
         }
 
         body {
-            background-color: var(--bg);
-            color: var(--text);
+            background-color: var(--bg-color);
+            color: var(--text-main);
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
-            background-image: radial-gradient(circle at 50% -20%, #01A98215, transparent 50%);
-        }
-
-        .login-container {
-            background-color: var(--surface);
-            border: 1px solid var(--surface-border);
-            padding: 40px;
-            border-radius: 12px;
-            width: 100%;
-            max-width: 400px;
-            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-            position: relative;
+            min-height: 100vh;
             overflow: hidden;
+            position: relative;
         }
 
-        .login-container::before {
-            content: '';
+        /* Ambient animated background */
+        .ambient-glow {
             position: absolute;
-            top: 0; left: 0; right: 0;
-            height: 3px;
-            background: var(--primary);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--primary-glow) 0%, transparent 60%);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            filter: blur(80px);
+            opacity: 0.5;
+            animation: pulse-glow 8s ease-in-out infinite alternate;
+            z-index: 0;
         }
 
-        .logo {
+        @keyframes pulse-glow {
+            0% { transform: translate(-50%, -50%) scale(1); opacity: 0.4; }
+            100% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.6; }
+        }
+
+        /* Glassmorphism Container */
+        .login-wrapper {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 420px;
+            padding: 20px;
+        }
+
+        .glass-card {
+            background: var(--surface);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--surface-border);
+            border-radius: 16px;
+            padding: 48px 40px;
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.05);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        /* Header / Branding */
+        .brand-header {
             display: flex;
             align-items: center;
-            gap: 12px;
-            margin-bottom: 30px;
             justify-content: center;
-        }
-
-        .logo-box {
-            width: 32px;
-            height: 32px;
-            background-color: var(--primary);
-            border-radius: 6px;
-        }
-
-        .logo-text {
-            font-size: 24px;
-            font-weight: 700;
-            letter-spacing: 1px;
-        }
-
-        .title {
-            text-align: center;
-            margin-bottom: 8px;
-            font-size: 20px;
-            font-weight: 600;
-        }
-
-        .subtitle {
-            text-align: center;
-            color: var(--text-muted);
+            gap: 12px;
             margin-bottom: 32px;
-            font-size: 14px;
         }
 
-        .form-group {
-            margin-bottom: 20px;
+        .brand-logo {
+            width: 38px;
+            height: 38px;
+            background: linear-gradient(135deg, #01A982 0%, #00765a 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 20px var(--primary-glow);
         }
 
-        .form-group label {
-            display: block;
+        .brand-logo svg {
+            width: 20px;
+            height: 20px;
+            fill: white;
+        }
+
+        .brand-text {
+            font-size: 26px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+            background: linear-gradient(to right, #fff, #aaa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        /* Typography */
+        h2.title {
+            text-align: center;
+            font-size: 22px;
+            font-weight: 500;
             margin-bottom: 8px;
-            font-size: 14px;
-            color: var(--text-muted);
+            letter-spacing: -0.5px;
         }
 
-        .form-control {
+        p.subtitle {
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 14px;
+            margin-bottom: 36px;
+            font-weight: 300;
+        }
+
+        /* Form Inputs */
+        .input-group {
+            position: relative;
+            margin-bottom: 24px;
+        }
+
+        .input-field {
             width: 100%;
-            padding: 12px 16px;
-            background-color: #1a1a1a;
+            background: var(--input-bg);
             border: 1px solid var(--surface-border);
-            border-radius: 6px;
+            border-radius: 10px;
+            padding: 14px 16px 14px 44px;
             color: white;
             font-size: 15px;
-            transition: all 0.2s;
-        }
-
-        .form-control:focus {
             outline: none;
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(1, 169, 130, 0.1);
+            transition: all 0.3s ease;
         }
 
-        .btn {
+        .input-field::placeholder {
+            color: #555560;
+        }
+
+        .input-field:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(1, 169, 130, 0.15);
+            background: rgba(0, 0, 0, 0.5);
+        }
+
+        /* Input Icons */
+        .input-icon {
+            position: absolute;
+            left: 16px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            width: 18px;
+            height: 18px;
+            pointer-events: none;
+            transition: color 0.3s ease;
+        }
+
+        .input-field:focus + .input-icon {
+            color: var(--primary);
+        }
+
+        /* Animated Action Button */
+        .submit-btn {
             width: 100%;
-            padding: 14px;
-            background-color: var(--primary);
+            padding: 15px;
+            background: linear-gradient(135deg, #01A982 0%, #008868 100%);
             color: white;
             border: none;
-            border-radius: 6px;
-            font-size: 15px;
+            border-radius: 10px;
+            font-size: 16px;
             font-weight: 600;
             cursor: pointer;
-            transition: background 0.2s;
-            margin-top: 10px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(1, 169, 130, 0.3);
+            margin-top: 8px;
         }
 
-        .btn:hover {
-            background-color: var(--primary-hover);
+        .submit-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(1, 169, 130, 0.4);
         }
 
-        .btn:disabled {
-            background-color: #333;
+        .submit-btn:active {
+            transform: translateY(0);
+        }
+
+        .submit-btn:disabled {
+            background: #2a2a30;
             color: #666;
             cursor: not-allowed;
+            box-shadow: none;
+            transform: none;
         }
 
-        .alert {
-            padding: 12px;
-            border-radius: 6px;
-            margin-bottom: 20px;
-            font-size: 14px;
-            display: none;
+        /* Alerts */
+        .status-alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: all 0.3s ease;
+            pointer-events: none;
+            position: absolute;
+            top: -60px;
+            left: 0;
+            width: 100%;
+        }
+
+        .status-alert.show {
+            opacity: 1;
+            transform: translateY(0);
         }
 
         .alert-error {
-            background-color: rgba(255, 74, 74, 0.1);
+            background: rgba(255, 51, 102, 0.1);
+            border: 1px solid rgba(255, 51, 102, 0.2);
             color: var(--danger);
-            border: 1px solid rgba(255, 74, 74, 0.2);
-            display: block;
+            box-shadow: 0 0 20px var(--danger-glow);
         }
 
         .alert-success {
-            background-color: rgba(1, 169, 130, 0.1);
-            color: var(--primary);
+            background: rgba(1, 169, 130, 0.1);
             border: 1px solid rgba(1, 169, 130, 0.2);
-            display: block;
+            color: var(--primary);
+            box-shadow: 0 0 20px var(--primary-glow);
         }
-        
-        .footer {
-            margin-top: 30px;
+
+        /* Footer & Toggle */
+        .card-footer {
+            margin-top: 32px;
             text-align: center;
-            font-size: 12px;
+            font-size: 13px;
             color: var(--text-muted);
         }
 
-        .api-config {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: var(--surface);
-            padding: 15px;
-            border: 1px solid var(--surface-border);
-            border-radius: 8px;
-            font-size: 12px;
-            width: 300px;
+        .toggle-link {
+            color: var(--text-main);
+            text-decoration: none;
+            font-weight: 500;
+            transition: color 0.2s ease;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .toggle-link::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: var(--primary);
+            transform: scaleX(0);
+            transform-origin: right;
+            transition: transform 0.3s ease;
         }
 
-        .api-config input {
-            width: 100%;
-            margin-top: 8px;
-            padding: 6px;
-            background: #1a1a1a;
-            border: 1px solid #333;
-            color: white;
-            border-radius: 4px;
+        .toggle-link:hover {
+            color: var(--primary);
+        }
+
+        .toggle-link:hover::after {
+            transform: scaleX(1);
+            transform-origin: left;
+        }
+
+        .system-badge {
+            margin-top: 24px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+
+        .system-dot {
+            width: 6px;
+            height: 6px;
+            background: var(--primary);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--primary);
+            animation: blink 2s infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Animations */
+        .fade-enter {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        .fade-enter-active {
+            opacity: 1;
+            transform: translateY(0);
+            transition: opacity 300ms, transform 300ms;
+        }
+        .fade-exit {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .fade-exit-active {
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: opacity 300ms, transform 300ms;
+            display: none;
+        }
+
+        /* SVG Icons Inline */
+        svg {
+            display: inline-block;
+            vertical-align: middle;
         }
     </style>
 </head>
 <body>
 
-    <div class="login-container">
-        <div class="logo">
-            <div class="logo-box"></div>
-            <div class="logo-text">HPE</div>
-        </div>
-        
-        <h1 class="title" id="formTitle">Enterprise Portal</h1>
-        <p class="subtitle" id="formSubtitle">Sign in to access your workspace</p>
+    <div class="ambient-glow"></div>
 
-        <div id="alertBox" class="alert"></div>
-
-        <form id="authForm">
-            <div class="form-group">
-                <label for="username">Username</label>
-                <input type="text" id="username" class="form-control" placeholder="e.g. alice, bob" required>
-            </div>
-            <div class="form-group" id="deptGroup" style="display: none;">
-                <label for="department">Department</label>
-                <input type="text" id="department" class="form-control" placeholder="e.g. Engineering, Sales">
-            </div>
-            <div class="form-group" id="passGroup">
-                <label for="password">Password</label>
-                <input type="password" id="password" class="form-control" placeholder="••••••••" required>
-            </div>
-
-            <button type="submit" id="submitBtn" class="btn">Sign In</button>
-        </form>
-
-        <div class="footer">
-            <p id="toggleText">Don't have an account? <a href="#" id="toggleMode" style="color: var(--primary); text-decoration: none;">Register here</a></p>
-            <div style="margin-top: 15px; opacity: 0.5;">HPE Enterprise Security Demo</div>
+    <div class="login-wrapper">
+        <div id="alertBox" class="status-alert">
+            <svg id="alertIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
+            <span id="alertText"></span>
         </div>
 
+        <div class="glass-card">
+            <div class="brand-header">
+                <div class="brand-logo">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                        <path d="M2 17l10 5 10-5"></path>
+                        <path d="M2 12l10 5 10-5"></path>
+                    </svg>
+                </div>
+                <div class="brand-text">HPE</div>
+            </div>
+            
+            <h2 class="title" id="formTitle">Secure Gateway</h2>
+            <p class="subtitle" id="formSubtitle">Authenticate to access the enterprise network</p>
+
+            <form id="authForm">
+                <div class="input-group">
+                    <input type="text" id="username" class="input-field" placeholder="Username (e.g. alice)" required>
+                    <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                </div>
+                
+                <div class="input-group" id="deptGroup" style="display: none;">
+                    <input type="text" id="department" class="input-field" placeholder="Department (e.g. Engineering)">
+                    <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+                </div>
+
+                <div class="input-group" id="passGroup">
+                    <input type="password" id="password" class="input-field" placeholder="Password" required>
+                    <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                </div>
+
+                <button type="submit" id="submitBtn" class="submit-btn">Authorize</button>
+            </form>
+
+            <div class="card-footer">
+                <p id="toggleText">New employee? <a class="toggle-link" id="toggleMode">Request access</a></p>
+                <div class="system-badge">
+                    <div class="system-dot"></div>
+                    Zero Trust Network Active
+                </div>
+            </div>
+        </div>
     </div>
 
-    <!-- For Ngrok Configuration when hosted on Render -->
-    <div class="api-config">
-        <label style="color: #888">Backend API URL (e.g. Ngrok Tunnel)</label>
-        <input type="text" id="apiUrl" value="" placeholder="Automatic (uses current host)">
-    </div>
+    <!-- Hidden config fallback if they ever need it, but out of UI sight -->
+    <input type="hidden" id="apiUrl" value="">
 
     <script src="app.js"></script>
 </body>

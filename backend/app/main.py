@@ -22,6 +22,7 @@ from app.routes import predict, health, pipeline, simulate, admin
 from app.ws_manager import manager as ws_manager, admin_manager
 from app.threat_engine import process_raw_event
 from app import admin_store
+from app.drift_monitor import drift_monitor_loop
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -149,6 +150,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"[WARN] Redis pub/sub listeners not started: {e} — falling back to local broadcast")
 
+    # ── Model Drift Monitor Task ──────────────────────────────────────────────
+    drift_task = None
+    try:
+        drift_task = asyncio.create_task(drift_monitor_loop())
+        logger.info("[OK] Model Drift Monitor service started in background")
+    except Exception as e:
+        logger.error(f"[FAIL] Failed to start Model Drift Monitor service: {e}")
+
     # ── Kafka consumer + broadcast task ───────────────────────────────────────
     result_queue = asyncio.Queue()
     broadcast_task = None
@@ -209,6 +218,14 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ───────────────────────────────────────────────────────────────
     logger.info("Shutting down HPE Pipeline...")
+
+    if drift_task:
+        logger.info("Stopping Model Drift Monitor task...")
+        drift_task.cancel()
+        try:
+            await drift_task
+        except asyncio.CancelledError:
+            pass
 
     try:
         from app import threat_engine
