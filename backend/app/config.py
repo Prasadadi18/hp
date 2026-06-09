@@ -8,8 +8,6 @@ import os
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9094")
 ELASTICSEARCH_URL = os.getenv("ELASTICSEARCH_URL", "http://localhost:9200")
 VAULT_ADDR = os.getenv("VAULT_ADDR", "http://localhost:8200")
-ADMIN_SECRET = os.getenv("ADMIN_SECRET", "hpe-admin-secret-change-me")
-
 # ── Phase 3: AppRole auth — VAULT_TOKEN is gone ────────────────────────────────
 # The backend no longer uses a long-lived root token.
 # It reads role_id + secret_id from the shared vault_data volume at startup
@@ -26,6 +24,11 @@ VAULT_APPROLE_CREDS_FILE = os.getenv(
 
 # ── PostgreSQL (Phase 2 — Vault database secrets engine) ──────────────────────
 POSTGRES_URL = os.getenv("POSTGRES_URL", "postgresql://localhost:5432/hpedb")
+
+# ── Admin JWT auth ─────────────────────────────────────────────────────────
+ADMIN_JWT_VAULT_PATH = "hpe/admin-jwt"          # Vault KV path for signing key
+ADMIN_JWT_TTL_MINUTES = int(os.getenv("ADMIN_JWT_TTL_MINUTES", "30"))
+ADMIN_RESET_TOKEN_TTL_SECONDS = 60              # One-time reset token validity
 
 # ── Model paths ────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -57,6 +60,13 @@ THREAT_LEVELS = {
     "MONITOR": 0.6,
     "BLOCK":   0.85,
 }
+
+# ── Credential rotation settings ───────────────────────────────────────────────
+# ENABLE_AUTO_USER_ROTATION: Controls automatic user credential rotation on threat detection
+#   - True (production):  User credentials rotate immediately on BLOCK/CRITICAL (no admin approval)
+#   - False (demo/dev):   User credentials rotate only after admin approval (easier testing)
+# Default: False for demo/testing convenience. Set to True in production deployments.
+ENABLE_AUTO_USER_ROTATION = os.getenv("ENABLE_AUTO_USER_ROTATION", "false").lower() in ("true", "1", "yes")
 
 # ── Server info ────────────────────────────────────────────────────────────────
 SERVER_LOCATION = {"lat": 12.97, "lng": 77.59, "city": "Bangalore, India"}
