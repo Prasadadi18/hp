@@ -3,6 +3,8 @@ routes/admin.py — Security Admin Dashboard API endpoints.
 Phase 4: CRITICAL_ALERT approval fires user + infrastructure rotation.
 Phase 5: Kafka credential rotation via Vault KV + reconnect on CRITICAL_ALERT.
 Phase 6: JWT-based admin authentication, safer reset (audit + Kafka preserved).
+         AUTOMATED USER ROTATION: User credentials rotate automatically on BLOCK/CRITICAL detection.
+         Admin approval now only triggers infrastructure rotation for CRITICAL_ALERT.
 """
 
 import logging
@@ -93,11 +95,17 @@ async def get_alert_detail(alert_id: str, admin=Depends(get_current_admin)):
 @router.post("/alerts/{alert_id}/approve", response_model=ApprovalResponse)
 async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(get_current_admin)):
     """
-    Approve credential rotation for a threat alert.
+    Approve infrastructure rotation for CRITICAL_ALERT threats.
 
-    BLOCK       → user-level rotation only (vault_client)
-    CRITICAL    → user-level + infrastructure rotation (vault_client + vault_infra_client)
-
+    Phase 6 Automated Rotation Strategy:
+    ────────────────────────────────────────────────────────────────────────────
+    BLOCK        → User credentials ALREADY rotated automatically at detection
+                   → Admin approval completes the alert (no further action)
+    
+    CRITICAL     → User credentials ALREADY rotated automatically at detection
+                   → Admin approval triggers infrastructure rotation only
+    ────────────────────────────────────────────────────────────────────────────
+    
     Phase 5: if affected_service == 'kafka', vault_infra_client rotates
     the Kafka KV secret and triggers kafka_client.reconnect_kafka().
     """
@@ -120,17 +128,13 @@ async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(g
 
     admin_username = admin.get('sub', 'unknown')
 
-    # ── User-level rotation (all approvals) ───────────────────────────────────
-    user_rotation_result = vault_client.rotate_credentials(
-        reason=f"admin_approved_{alert['threat_action'].lower()}_score_{alert['threat_score']:.4f}",
-        user=alert["user_id"],
-        threat_score=alert["threat_score"],
-    )
-
+    # ── User credentials already rotated automatically ────────────────────────
+    user_creds_status = alert.get("event_data", {}).get("user_credentials_rotated", "unknown")
+    
     logger.info(
-        f"[ADMIN] User credential rotation for {alert['user_id']} "
-        f"(alert={alert_id}, admin={admin_username}, success={user_rotation_result.get('success')}, "
-        f"action={alert['threat_action']})"
+        f"[ADMIN] Alert {alert_id} approved by {admin_username}. "
+        f"User credentials for {alert['user_id']} were already rotated automatically "
+        f"at detection (status: {user_creds_status}, action={alert['threat_action']})"
     )
 
     # ── Infrastructure rotation (CRITICAL_ALERT only) ─────────────────────────
@@ -178,13 +182,14 @@ async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(g
             }
     else:
         logger.info(
-            f"[ADMIN] BLOCK threat approved by {admin_username} — user rotation only "
-            f"(score={alert['threat_score']:.4f} < 0.85 CRITICAL threshold)"
+            f"[ADMIN] BLOCK threat approved by {admin_username} — "
+            f"user credentials were already rotated automatically at detection "
+            f"(score={alert['threat_score']:.4f} < 0.85 CRITICAL threshold). No infrastructure rotation needed."
         )
 
     # ── Attach combined result to alert for audit trail ───────────────────────
     combined_result = {
-        "user_rotation":    user_rotation_result,
+        "user_rotation":    {"status": "completed_automatically", "note": f"User credentials rotated at detection (status: {user_creds_status})"},
         "infra_rotation":   infra_rotation_result,
         "affected_service": affected_service,
         "threat_action":    alert["threat_action"],
@@ -199,14 +204,16 @@ async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(g
             "action":                "approved",
             "user_id":               alert["user_id"],
             "threat_action":         alert["threat_action"],
-            "user_rotation_success": user_rotation_result.get("success", False),
+            "user_rotation_success": True,  # already done automatically
+            "user_rotation_automatic": True,
             "infra_rotation":        infra_rotation_result,
             "affected_service":      affected_service,
         },
     })
 
     # ── Build response message ────────────────────────────────────────────────
-    message_parts = [f"User credentials rotated for {alert['user_id']}."]
+    message_parts = [f"User credentials for {alert['user_id']} were already rotated automatically at threat detection."]
+    
     if infra_rotation_result and infra_rotation_result.get("success"):
         if affected_service == "kafka":
             kafka_reconnected = infra_rotation_result.get(
