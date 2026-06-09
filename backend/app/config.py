@@ -61,6 +61,13 @@ THREAT_LEVELS = {
     "BLOCK":   0.85,
 }
 
+# ── Credential rotation settings ───────────────────────────────────────────────
+# ENABLE_AUTO_USER_ROTATION: Controls automatic user credential rotation on threat detection
+#   - True (production):  User credentials rotate immediately on BLOCK/CRITICAL (no admin approval)
+#   - False (demo/dev):   User credentials rotate only after admin approval (easier testing)
+# Default: False for demo/testing convenience. Set to True in production deployments.
+ENABLE_AUTO_USER_ROTATION = os.getenv("ENABLE_AUTO_USER_ROTATION", "false").lower() in ("true", "1", "yes")
+
 # ── Server info ────────────────────────────────────────────────────────────────
 SERVER_LOCATION = {"lat": 12.97, "lng": 77.59, "city": "Bangalore, India"}
 APP_NAME = "HPE"
