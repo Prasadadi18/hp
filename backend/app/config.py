@@ -76,3 +76,13 @@ APP_VERSION = "1.0.0"
 
 # ── GitHub repository ──────────────────────────────────────────────────────────
 GITHUB_REPO = os.getenv("GITHUB_REPO", "cheeseburden/hp")
+
+# ── SOAR Email Alerts (Stage 6) ────────────────────────────────────────────────
+# Set SOAR_EMAIL_ENABLED=true to activate real email alerts on BLOCK/CRITICAL threats.
+# Uses Gmail SMTP with App Password (never use regular Gmail password).
+SOAR_EMAIL_ENABLED    = os.getenv("SOAR_EMAIL_ENABLED", "false").lower() == "true"
+SOAR_SMTP_HOST        = os.getenv("SOAR_SMTP_HOST", "smtp.gmail.com")
+SOAR_SMTP_PORT        = int(os.getenv("SOAR_SMTP_PORT", "587"))
+SOAR_SENDER_EMAIL     = os.getenv("SOAR_SENDER_EMAIL", "")
+SOAR_SENDER_PASSWORD  = os.getenv("SOAR_SENDER_PASSWORD", "")   # Gmail App Password
+SOAR_RECEIVER_EMAIL   = os.getenv("SOAR_RECEIVER_EMAIL", "")

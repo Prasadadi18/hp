@@ -207,6 +207,13 @@ services:
       # The backend reads role_id + secret_id from /vault/data/.approle_credentials
       # and exchanges them for a short-lived token via AppRole auth.
 
+      # ── SOAR Email Alerts ───────────────────────────────────────────────────
+      - SOAR_EMAIL_ENABLED=true
+      - SOAR_SMTP_HOST=smtp.gmail.com
+      - SOAR_SMTP_PORT=587
+      - SOAR_SENDER_EMAIL=adinarayan736@gmail.com
+      - SOAR_SENDER_PASSWORD=nesx dyas qomw zvit
+      - SOAR_RECEIVER_EMAIL=adinarayan736@gmail.com
       # ── Credential Rotation Mode ──────────────────────────────────────────
       # ENABLE_AUTO_USER_ROTATION controls user credential rotation behavior:
       #   false (demo mode):       User creds rotate ONLY after admin approval
