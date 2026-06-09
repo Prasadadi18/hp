@@ -14,6 +14,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, HTTPExce
 from pydantic import BaseModel
 from app.schemas import ApprovalRequest, ApprovalResponse
 from app.auth_admin import get_current_admin, create_admin_token, create_reset_token, validate_reset_token, verify_token
+from app.config import ENABLE_AUTO_USER_ROTATION
 
 from app import admin_store, vault_client, vault_infra_client, elastic_client
 from app.ws_manager import admin_manager
@@ -95,15 +96,23 @@ async def get_alert_detail(alert_id: str, admin=Depends(get_current_admin)):
 @router.post("/alerts/{alert_id}/approve", response_model=ApprovalResponse)
 async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(get_current_admin)):
     """
-    Approve infrastructure rotation for CRITICAL_ALERT threats.
+    Approve credential rotation for threat alerts.
 
-    Phase 6 Automated Rotation Strategy:
+    Phase 6 Rotation Strategy (controlled by ENABLE_AUTO_USER_ROTATION flag):
     ────────────────────────────────────────────────────────────────────────────
-    BLOCK        → User credentials ALREADY rotated automatically at detection
-                   → Admin approval completes the alert (no further action)
+    Production Mode (ENABLE_AUTO_USER_ROTATION=true):
+      BLOCK        → User credentials ALREADY rotated automatically at detection
+                     → Admin approval completes the alert (no further action)
+      
+      CRITICAL     → User credentials ALREADY rotated automatically at detection
+                     → Admin approval triggers infrastructure rotation only
     
-    CRITICAL     → User credentials ALREADY rotated automatically at detection
-                   → Admin approval triggers infrastructure rotation only
+    Demo/Testing Mode (ENABLE_AUTO_USER_ROTATION=false):
+      BLOCK        → User credentials rotate now on admin approval
+                     → Allows testing with same credentials multiple times
+      
+      CRITICAL     → User + infrastructure credentials rotate now on admin approval
+                     → Full manual control for demos/testing
     ────────────────────────────────────────────────────────────────────────────
     
     Phase 5: if affected_service == 'kafka', vault_infra_client rotates
@@ -128,14 +137,32 @@ async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(g
 
     admin_username = admin.get('sub', 'unknown')
 
-    # ── User credentials already rotated automatically ────────────────────────
-    user_creds_status = alert.get("event_data", {}).get("user_credentials_rotated", "unknown")
+    # ── Handle user rotation based on mode ────────────────────────────────────
+    user_rotation_result = None
     
-    logger.info(
-        f"[ADMIN] Alert {alert_id} approved by {admin_username}. "
-        f"User credentials for {alert['user_id']} were already rotated automatically "
-        f"at detection (status: {user_creds_status}, action={alert['threat_action']})"
-    )
+    if ENABLE_AUTO_USER_ROTATION:
+        # Production mode: user credentials already rotated at detection
+        user_creds_status = alert.get("event_data", {}).get("user_credentials_rotated", "unknown")
+        
+        logger.info(
+            f"[ADMIN] Alert {alert_id} approved by {admin_username}. "
+            f"User credentials for {alert['user_id']} were already rotated automatically "
+            f"at detection (status: {user_creds_status}, action={alert['threat_action']})"
+        )
+        user_rotation_result = {"status": "completed_automatically", "mode": "production"}
+    else:
+        # Demo/testing mode: rotate user credentials NOW on admin approval
+        user_rotation_result = vault_client.rotate_credentials(
+            reason=f"admin_approved_{alert['threat_action'].lower()}_score_{alert['threat_score']:.4f}",
+            user=alert["user_id"],
+            threat_score=alert["threat_score"],
+        )
+        
+        logger.info(
+            f"[ADMIN] User credential rotation for {alert['user_id']} "
+            f"(alert={alert_id}, admin={admin_username}, success={user_rotation_result.get('success')}, "
+            f"mode=demo, action={alert['threat_action']})"
+        )
 
     # ── Infrastructure rotation (CRITICAL_ALERT only) ─────────────────────────
     infra_rotation_result = None
@@ -189,10 +216,11 @@ async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(g
 
     # ── Attach combined result to alert for audit trail ───────────────────────
     combined_result = {
-        "user_rotation":    {"status": "completed_automatically", "note": f"User credentials rotated at detection (status: {user_creds_status})"},
+        "user_rotation":    user_rotation_result,
         "infra_rotation":   infra_rotation_result,
         "affected_service": affected_service,
         "threat_action":    alert["threat_action"],
+        "auto_rotation_enabled": ENABLE_AUTO_USER_ROTATION,
     }
     admin_store.set_rotation_result(alert_id, combined_result)
 
@@ -204,15 +232,24 @@ async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(g
             "action":                "approved",
             "user_id":               alert["user_id"],
             "threat_action":         alert["threat_action"],
-            "user_rotation_success": True,  # already done automatically
-            "user_rotation_automatic": True,
+            "user_rotation_success": (
+                True if ENABLE_AUTO_USER_ROTATION
+                else user_rotation_result.get("success", False)
+            ),
+            "user_rotation_automatic": ENABLE_AUTO_USER_ROTATION,
             "infra_rotation":        infra_rotation_result,
             "affected_service":      affected_service,
         },
     })
 
     # ── Build response message ────────────────────────────────────────────────
-    message_parts = [f"User credentials for {alert['user_id']} were already rotated automatically at threat detection."]
+    if ENABLE_AUTO_USER_ROTATION:
+        message_parts = [f"User credentials for {alert['user_id']} were already rotated automatically at threat detection."]
+    else:
+        if user_rotation_result and user_rotation_result.get("success"):
+            message_parts = [f"User credentials for {alert['user_id']} rotated successfully (demo mode)."]
+        else:
+            message_parts = [f"User credential rotation attempted for {alert['user_id']} (check logs for details)."]
     
     if infra_rotation_result and infra_rotation_result.get("success"):
         if affected_service == "kafka":

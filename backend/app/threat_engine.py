@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Dict, Any, List
 
-from app.config import THREAT_LEVELS
+from app.config import THREAT_LEVELS, ENABLE_AUTO_USER_ROTATION
 from app.schemas import (
     PredictionResult, PipelineStageResult, ThreatAction, GeoLocation, NetworkEvent
 )
@@ -448,11 +448,19 @@ def process_event(event: NetworkEvent) -> PredictionResult:
     stages.append(stage6)
 
     # ── Stage 7: HashiCorp Vault (REAL — Automated User Rotation) ────────────
-    # Phase 6: Automated credential rotation strategy:
-    #   BLOCK           → automatic user rotation immediately (no admin approval)
-    #   CRITICAL_ALERT  → automatic user rotation immediately + infra rotation pending admin approval
+    # Phase 6: Automated credential rotation strategy (controlled by ENABLE_AUTO_USER_ROTATION):
+    #   BLOCK           → automatic user rotation if flag enabled (no admin approval)
+    #   CRITICAL_ALERT  → automatic user rotation if flag enabled + infra rotation pending admin approval
     #   MONITOR         → logged, no rotation
     #   ALLOW           → no action
+    #
+    # Demo/Testing Mode (ENABLE_AUTO_USER_ROTATION=false):
+    #   - User credentials rotate ONLY after admin approval (easier to test multiple scenarios)
+    #   - Credentials remain stable during testing/demos
+    #
+    # Production Mode (ENABLE_AUTO_USER_ROTATION=true):
+    #   - User credentials rotate immediately on detection (rapid threat response)
+    #   - Aligns with enterprise SOAR best practices
     vault_t0 = time.time()
     vault_result = {}
     user_rotation_result = None
@@ -461,7 +469,7 @@ def process_event(event: NetworkEvent) -> PredictionResult:
         ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT
     )
 
-    if is_high_severity:
+    if is_high_severity and ENABLE_AUTO_USER_ROTATION:
         # ── Automatic User Rotation (BLOCK & CRITICAL_ALERT) ──────────────────
         user_rotation_result = vault_client.rotate_credentials(
             reason=f"auto_rotation_{threat_action.value.lower()}_score_{ensemble_score:.4f}",
@@ -480,38 +488,62 @@ def process_event(event: NetworkEvent) -> PredictionResult:
             else None
         )
         
-        if threat_action == ThreatAction.CRITICAL_ALERT:
+        if ENABLE_AUTO_USER_ROTATION:
+            # Production mode: user rotation already completed
+            if threat_action == ThreatAction.CRITICAL_ALERT:
+                vault_result = {
+                    "status": "user_rotated_infra_pending",
+                    "message": (
+                        "User credentials rotated automatically. "
+                        "Infrastructure rotation pending admin approval."
+                    ),
+                    "user": event_dict.get("user_id", "unknown"),
+                    "threat_score": round(ensemble_score, 6),
+                    "user_rotation": user_rotation_result,
+                    "rotation_plan": {
+                        "user_rotation": "completed_automatically",
+                        "infra_rotation": "pending_admin_approval",
+                        "affected_service": affected_service,
+                        "reason": (
+                            "CRITICAL_ALERT: user credentials rotated automatically, "
+                            "infrastructure rotation requires admin approval"
+                        ),
+                    },
+                }
+            else:  # BLOCK
+                vault_result = {
+                    "status": "user_rotated_completed",
+                    "message": "User credentials rotated automatically (BLOCK severity).",
+                    "user": event_dict.get("user_id", "unknown"),
+                    "threat_score": round(ensemble_score, 6),
+                    "user_rotation": user_rotation_result,
+                    "rotation_plan": {
+                        "user_rotation": "completed_automatically",
+                        "infra_rotation": "not_required",
+                        "affected_service": None,
+                        "reason": "BLOCK: user credentials rotated automatically (no infra rotation needed)",
+                    },
+                }
+        else:
+            # Demo/Testing mode: user rotation pending admin approval
             vault_result = {
-                "status": "user_rotated_infra_pending",
+                "status": "pending_admin_approval",
                 "message": (
-                    "User credentials rotated automatically. "
-                    "Infrastructure rotation pending admin approval."
+                    "Credential rotation requires admin approval. "
+                    f"Threat action: {threat_action.value}. "
+                    "(Auto-rotation disabled for demo/testing)"
                 ),
                 "user": event_dict.get("user_id", "unknown"),
                 "threat_score": round(ensemble_score, 6),
-                "user_rotation": user_rotation_result,
                 "rotation_plan": {
-                    "user_rotation": "completed_automatically",
-                    "infra_rotation": "pending_admin_approval",
+                    "user_rotation": "pending_admin_approval",
+                    "infra_rotation": "pending_admin_approval" if threat_action == ThreatAction.CRITICAL_ALERT else "not_required",
                     "affected_service": affected_service,
                     "reason": (
-                        "CRITICAL_ALERT: user credentials rotated automatically, "
-                        "infrastructure rotation requires admin approval"
+                        "Demo mode: user and infrastructure credentials will be rotated on admin approval"
+                        if threat_action == ThreatAction.CRITICAL_ALERT
+                        else "Demo mode: user credentials will be rotated on admin approval"
                     ),
-                },
-            }
-        else:  # BLOCK
-            vault_result = {
-                "status": "user_rotated_completed",
-                "message": "User credentials rotated automatically (BLOCK severity).",
-                "user": event_dict.get("user_id", "unknown"),
-                "threat_score": round(ensemble_score, 6),
-                "user_rotation": user_rotation_result,
-                "rotation_plan": {
-                    "user_rotation": "completed_automatically",
-                    "infra_rotation": "not_required",
-                    "affected_service": None,
-                    "reason": "BLOCK: user credentials rotated automatically (no infra rotation needed)",
                 },
             }
     elif is_threat and threat_action == ThreatAction.MONITOR:
@@ -533,47 +565,81 @@ def process_event(event: NetworkEvent) -> PredictionResult:
     stages.append(PipelineStageResult(
         stage_name="HashiCorp Vault",
         stage_number=7,
-        status="rotated" if user_rotation_result and user_rotation_result.get("success") else ("pending_approval" if threat_action == ThreatAction.CRITICAL_ALERT else "no_action"),
+        status=(
+            "rotated" if user_rotation_result and user_rotation_result.get("success") 
+            else ("pending_approval" if is_high_severity else "no_action")
+        ),
         latency_ms=round(vault_latency, 2),
         details=vault_result,
         is_real_tool=True,
     ))
 
     # ── Stage 8: Credential Rotation (Automated User + Deferred Infra) ────────
-    # Phase 6: Automated rotation strategy:
-    #   completed_user_only             → BLOCK: user rotated automatically, done
-    #   completed_user_pending_infra    → CRITICAL: user rotated automatically, infra awaiting approval
-    #   skipped                         → no threat or MONITOR
+    # Phase 6: Rotation strategy controlled by ENABLE_AUTO_USER_ROTATION flag:
+    #   Production mode (flag=true):
+    #     - completed_user_only             → BLOCK: user rotated automatically, done
+    #     - completed_user_pending_infra    → CRITICAL: user rotated automatically, infra awaiting approval
+    #   Demo mode (flag=false):
+    #     - pending_user_rotation           → BLOCK: user rotation awaiting approval
+    #     - pending_user_and_infra_rotation → CRITICAL: both awaiting approval
+    #   Always:
+    #     - skipped                         → no threat or MONITOR
     if is_high_severity:
         rotation_plan = vault_result.get("rotation_plan", {})
         user_rot_status = rotation_plan.get("user_rotation", "unknown")
         infra_rot_status = rotation_plan.get("infra_rotation", "not_required")
         affected_service = rotation_plan.get("affected_service")
         
-        if threat_action == ThreatAction.CRITICAL_ALERT:
-            stage8_status = "completed_user_pending_infra"
-            stage8_details = {
-                "user_rotation": f"completed_automatically (rotation #{vault_client.get_rotation_count()})",
-                "infra_rotation": (
-                    f"pending_admin_approval → will rotate '{affected_service}' service on approval"
-                ),
-                "automation_note": "User credentials rotated immediately for rapid threat response",
-                "vault_auth_method": vault_client.get_auth_method(),
-                "vault_infra_connected": vault_infra_client.is_connected(),
-                "total_user_rotations_so_far": vault_client.get_rotation_count(),
-                "total_infra_rotations_so_far": vault_infra_client.get_infra_rotation_count(),
-            }
-        else:  # BLOCK
-            stage8_status = "completed_user_only"
-            stage8_details = {
-                "user_rotation": f"completed_automatically (rotation #{vault_client.get_rotation_count()})",
-                "infra_rotation": "not_required (BLOCK threshold, not CRITICAL)",
-                "automation_note": "User credentials rotated immediately, no infrastructure rotation needed",
-                "vault_auth_method": vault_client.get_auth_method(),
-                "vault_infra_connected": vault_infra_client.is_connected(),
-                "total_user_rotations_so_far": vault_client.get_rotation_count(),
-                "total_infra_rotations_so_far": vault_infra_client.get_infra_rotation_count(),
-            }
+        if ENABLE_AUTO_USER_ROTATION:
+            # Production mode: user already rotated
+            if threat_action == ThreatAction.CRITICAL_ALERT:
+                stage8_status = "completed_user_pending_infra"
+                stage8_details = {
+                    "user_rotation": f"completed_automatically (rotation #{vault_client.get_rotation_count()})",
+                    "infra_rotation": (
+                        f"pending_admin_approval → will rotate '{affected_service}' service on approval"
+                    ),
+                    "automation_note": "User credentials rotated immediately for rapid threat response",
+                    "vault_auth_method": vault_client.get_auth_method(),
+                    "vault_infra_connected": vault_infra_client.is_connected(),
+                    "total_user_rotations_so_far": vault_client.get_rotation_count(),
+                    "total_infra_rotations_so_far": vault_infra_client.get_infra_rotation_count(),
+                }
+            else:  # BLOCK
+                stage8_status = "completed_user_only"
+                stage8_details = {
+                    "user_rotation": f"completed_automatically (rotation #{vault_client.get_rotation_count()})",
+                    "infra_rotation": "not_required (BLOCK threshold, not CRITICAL)",
+                    "automation_note": "User credentials rotated immediately, no infrastructure rotation needed",
+                    "vault_auth_method": vault_client.get_auth_method(),
+                    "vault_infra_connected": vault_infra_client.is_connected(),
+                    "total_user_rotations_so_far": vault_client.get_rotation_count(),
+                    "total_infra_rotations_so_far": vault_infra_client.get_infra_rotation_count(),
+                }
+        else:
+            # Demo/Testing mode: user rotation pending
+            if threat_action == ThreatAction.CRITICAL_ALERT:
+                stage8_status = "pending_user_and_infra_rotation"
+                stage8_details = {
+                    "user_rotation": "pending_admin_approval",
+                    "infra_rotation": f"pending_admin_approval → will rotate '{affected_service}' service",
+                    "demo_mode_note": "Auto-rotation disabled for demo/testing convenience",
+                    "vault_auth_method": vault_client.get_auth_method(),
+                    "vault_infra_connected": vault_infra_client.is_connected(),
+                    "total_user_rotations_so_far": vault_client.get_rotation_count(),
+                    "total_infra_rotations_so_far": vault_infra_client.get_infra_rotation_count(),
+                }
+            else:  # BLOCK
+                stage8_status = "pending_user_rotation"
+                stage8_details = {
+                    "user_rotation": "pending_admin_approval",
+                    "infra_rotation": "not_required (BLOCK threshold, not CRITICAL)",
+                    "demo_mode_note": "Auto-rotation disabled for demo/testing convenience",
+                    "vault_auth_method": vault_client.get_auth_method(),
+                    "vault_infra_connected": vault_infra_client.is_connected(),
+                    "total_user_rotations_so_far": vault_client.get_rotation_count(),
+                    "total_infra_rotations_so_far": vault_infra_client.get_infra_rotation_count(),
+                }
     else:
         stage8_status = "skipped"
         stage8_details = {
@@ -718,7 +784,11 @@ def process_event(event: NetworkEvent) -> PredictionResult:
                 "event_source":             event_dict.get("event_source", "replayed_dataset"),
                 "threat_reasons":           threat_reasons,
                 "is_vpn":                   event_dict.get("is_vpn", False),
-                "user_credentials_rotated": "yes_automatically" if user_rotation_result and user_rotation_result.get("success") else "failed",
+                "user_credentials_rotated": (
+                    "yes_automatically" if (ENABLE_AUTO_USER_ROTATION and user_rotation_result and user_rotation_result.get("success"))
+                    else "pending_approval" if not ENABLE_AUTO_USER_ROTATION
+                    else "failed"
+                ),
             },
             pipeline_stages=stages_dicts,
             source_geo=src_geo,
