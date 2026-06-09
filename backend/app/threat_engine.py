@@ -25,6 +25,7 @@ from app import vault_client
 from app import vault_infra_client
 from app import pipeline_stages
 from app import admin_store
+from app.soar_email import send_threat_alert_async
 
 logger = logging.getLogger("hpe.threat_engine")
 
@@ -443,9 +444,20 @@ def process_event(event: NetworkEvent) -> PredictionResult:
         is_real_tool=True,
     ))
 
-    # ── Stage 6: SOAR Automation (simulated) ──────────────────────────────────
+    # ── Stage 6: SOAR Automation (simulated workflows + REAL email alert) ──────
     stage6 = pipeline_stages.simulate_soar_automation(event_dict, is_threat, ensemble_score)
     stages.append(stage6)
+
+    # REAL: Fire email alert in background thread — pipeline is never blocked
+    if is_threat and threat_action in (ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT):
+        send_threat_alert_async(
+            event_id=event_id,
+            user=event_dict.get("user_id"),
+            source_ip=event_dict.get("source_ip"),
+            threat_score=ensemble_score,
+            action=threat_action.value,
+            reasons=threat_reasons,
+        )
 
     # ── Stage 7: HashiCorp Vault (REAL — Human-in-the-Loop) ───────────────────
     # Phase 4: Stage 7 details now reflect the full rotation plan:
