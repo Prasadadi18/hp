@@ -171,18 +171,18 @@ jobs:
           f1     = float(threat_f1.group(1)) if threat_f1 else 0
           status = '✅ PASS' if f1 >= min_f1 else '❌ FAIL'
 
-          summary = f'''## 🤖 Model Training Results
-
-| Metric | Value |
-|--------|-------|
-| Status | {status} |
-| Threat class F1 | {threat_f1.group(1) if threat_f1 else 'N/A'} |
-| Threat precision | {threat_prec.group(1) if threat_prec else 'N/A'} |
-| Threat recall | {threat_rec.group(1) if threat_rec else 'N/A'} |
-| Best threshold | {thresh.group(1) if thresh else 'N/A'} |
-| Min required F1 | {min_f1} |
-| Training duration | {duration.group(1) + 's' if duration else 'N/A'} |
-'''
+          summary = (
+              "## 🤖 Model Training Results\n\n"
+              "| Metric | Value |\n"
+              "|---|---|\n"
+              f"| Status | {status} |\n"
+              f"| Threat class F1 | {threat_f1.group(1) if threat_f1 else 'N/A'} |\n"
+              f"| Threat precision | {threat_prec.group(1) if threat_prec else 'N/A'} |\n"
+              f"| Threat recall | {threat_rec.group(1) if threat_rec else 'N/A'} |\n"
+              f"| Best threshold | {thresh.group(1) if thresh else 'N/A'} |\n"
+              f"| Min required F1 | {min_f1} |\n"
+              f"| Training duration | {duration.group(1) + 's' if duration else 'N/A'} |\n"
+          )
 
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
               f.write(summary)
