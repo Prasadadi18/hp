@@ -14,6 +14,7 @@ import pandas as pd
 import numpy as np
 import warnings
 import os
+import sklearn
 import sys
 import json
 import joblib
@@ -361,7 +362,9 @@ def main():
             "label_encoders": label_encoders,
             "feature_cols": feature_cols,
             "weights": weights,
-            "best_threshold": best_threshold
+            "best_threshold": best_threshold,
+            "sklearn_version": sklearn.__version__,
+            "numpy_version": np.__version__
         }
 
         artifacts_path = os.path.join(OUTPUT_DIR, "pipeline_artifacts_v2.joblib")

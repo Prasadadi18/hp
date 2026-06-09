@@ -442,6 +442,8 @@ window._rejectReg = async function (username) {
 
 
 
+let adminReconnectAttempts = 0;
+
 /**
  * Connect admin WebSocket for real-time notifications
  */
@@ -458,6 +460,7 @@ export function connectAdminWebSocket() {
 
     adminWs.onopen = () => {
       console.log('[ADMIN] WebSocket connected');
+      adminReconnectAttempts = 0; // Reset attempts on successful connection
     };
 
     adminWs.onmessage = (event) => {
@@ -472,7 +475,7 @@ export function connectAdminWebSocket() {
     adminWs.onclose = () => {
       console.log('[ADMIN] WebSocket disconnected');
       if (isAdminLoggedIn()) {
-        setTimeout(connectAdminWebSocket, 5000);
+        scheduleAdminReconnect();
       }
     };
 
@@ -481,7 +484,24 @@ export function connectAdminWebSocket() {
     };
   } catch (e) {
     console.error('[ADMIN] WebSocket connection failed:', e);
+    if (isAdminLoggedIn()) {
+      scheduleAdminReconnect();
+    }
   }
+}
+
+function scheduleAdminReconnect() {
+  if (adminWs && (adminWs.readyState === WebSocket.CONNECTING || adminWs.readyState === WebSocket.OPEN)) {
+    return;
+  }
+  const baseDelay = 1000;
+  const maxDelay = 30000;
+  const delay = Math.min(maxDelay, baseDelay * Math.pow(2, adminReconnectAttempts));
+  const jitter = (Math.random() - 0.5) * 0.4 * delay;
+  const reconnectDelay = Math.max(1000, delay + jitter);
+  console.log(`[ADMIN] Scheduling admin WebSocket reconnect in ${(reconnectDelay / 1000).toFixed(2)}s (attempt ${adminReconnectAttempts + 1})`);
+  adminReconnectAttempts++;
+  setTimeout(connectAdminWebSocket, reconnectDelay);
 }
 
 

@@ -175,6 +175,12 @@ def connect_vault() -> bool:
                     _load_user_profiles()
                     _init_all_user_secrets()
                     _connected = True
+                    try:
+                        from app import vault_infra_client
+                        if vault_infra_client.is_connected():
+                            vault_infra_client.connect(_client)
+                    except Exception:
+                        pass
                     return True
                 else:
                     logger.error("[Vault] AppRole token obtained but authentication check failed")
@@ -192,6 +198,12 @@ def connect_vault() -> bool:
                 _load_user_profiles()
                 _init_all_user_secrets()
                 _connected = True
+                try:
+                    from app import vault_infra_client
+                    if vault_infra_client.is_connected():
+                        vault_infra_client.connect(_client)
+                except Exception:
+                    pass
                 return True
             else:
                 logger.error("[Vault] Static token authentication failed")
@@ -303,15 +315,28 @@ def _init_all_user_secrets():
     )
 
 
+def ensure_connected() -> bool:
+    """Ensure that the Vault client is connected, attempting to reconnect if not."""
+    global _connected, _client
+    if _connected and _client:
+        try:
+            if _client.is_authenticated():
+                return True
+        except Exception:
+            pass
+    logger.info("[Vault] Connection lost or not initialized. Attempting reconnection...")
+    return connect_vault()
+
+
 def is_connected() -> bool:
-    return _connected
+    return ensure_connected()
 
 
 def rotate_credentials(reason: str = "threat_detected", user: str = "unknown",
                        threat_score: float = 0.0) -> Dict[str, Any]:
     global _rotation_count
 
-    if not _client or not _connected:
+    if not ensure_connected():
         return {"success": False, "error": "Vault not connected"}
 
     try:
@@ -374,7 +399,7 @@ def rotate_credentials(reason: str = "threat_detected", user: str = "unknown",
 
 
 def get_current_credentials() -> Dict[str, Any]:
-    if not _client or not _connected:
+    if not ensure_connected():
         return {"error": "Vault not connected"}
     try:
         response = _client.secrets.kv.v2.read_secret_version(
@@ -405,7 +430,7 @@ def get_auth_method() -> str:
 
 
 def get_visible_credentials() -> Dict[str, Any]:
-    if not _client or not _connected:
+    if not ensure_connected():
         return {"error": "Vault not connected", "rotation_count": _rotation_count}
 
     latest_user = _find_latest_rotated_user()
@@ -425,7 +450,7 @@ def get_visible_credentials() -> Dict[str, Any]:
 
 
 def _find_latest_rotated_user() -> Optional[Dict[str, Any]]:
-    if not _client or not _connected:
+    if not ensure_connected():
         return None
 
     latest = None
@@ -469,7 +494,7 @@ def _find_latest_rotated_user() -> Optional[Dict[str, Any]]:
 
 
 def get_all_user_credentials() -> List[Dict[str, Any]]:
-    if not _client or not _connected:
+    if not ensure_connected():
         return []
 
     results = []
@@ -509,7 +534,7 @@ def get_all_user_credentials() -> List[Dict[str, Any]]:
 
 
 def get_user_credentials(user_id: str) -> Dict[str, Any]:
-    if not _client or not _connected:
+    if not ensure_connected():
         return {"error": "Vault not connected"}
 
     vault_path = f"hpe/users/{user_id}"
@@ -551,7 +576,7 @@ def _generate_api_key() -> str:
 
 def get_github_pat() -> Optional[str]:
     import os
-    if not _client or not _connected:
+    if not ensure_connected():
         return os.getenv("GITHUB_PAT")
     try:
         response = _client.secrets.kv.v2.read_secret_version(
