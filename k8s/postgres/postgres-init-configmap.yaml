@@ -47,16 +47,6 @@ data:
         revoked_at TIMESTAMPTZ
     );
 
-    CREATE TABLE IF NOT EXISTS hpe_users (
-        id SERIAL PRIMARY KEY,
-        username VARCHAR(64) UNIQUE NOT NULL,
-        password_hash VARCHAR(256),
-        department VARCHAR(64),
-        last_login TIMESTAMPTZ,
-        failed_attempts INT DEFAULT 0,
-        status VARCHAR(32) DEFAULT 'active'
-    );
-
     CREATE TABLE IF NOT EXISTS hpe_pipeline_metrics (
         id              INTEGER PRIMARY KEY DEFAULT 1,
         total_requests  BIGINT DEFAULT 0,
