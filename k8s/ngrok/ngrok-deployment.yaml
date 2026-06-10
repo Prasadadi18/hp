@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ngrok
+  namespace: hpe
+  labels:
+    app: ngrok
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ngrok
+  template:
+    metadata:
+      labels:
+        app: ngrok
+    spec:
+      containers:
+      - name: ngrok
+        image: ngrok/ngrok:latest
+        command: ["ngrok", "start", "--all", "--config", "/etc/ngrok.yml"]
+        ports:
+        - containerPort: 4040
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/ngrok.yml
+          subPath: ngrok.yml
+      volumes:
+      - name: config-volume
+        configMap:
+          name: ngrok-config

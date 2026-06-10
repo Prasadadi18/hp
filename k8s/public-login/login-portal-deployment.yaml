@@ -1,0 +1,23 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: login-portal
+  namespace: hpe
+  labels:
+    app: login-portal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: login-portal
+  template:
+    metadata:
+      labels:
+        app: login-portal
+    spec:
+      containers:
+      - name: login-portal
+        image: hpe-login-portal:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 80

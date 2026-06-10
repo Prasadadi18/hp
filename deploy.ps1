@@ -75,6 +75,10 @@ if (-not $SkipBuild) {
     Write-Step "2b" "Building frontend image"
     docker build -t hpe-frontend:latest -f frontend/Dockerfile ./frontend
     if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: frontend build failed" -ForegroundColor Red; exit 1 }
+
+    Write-Step "2c" "Building login-portal image"
+    docker build -t hpe-login-portal:latest -f public-login/Dockerfile ./public-login
+    if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: login-portal build failed" -ForegroundColor Red; exit 1 }
 } else {
     Write-Step "2" "Skipping image builds (--SkipBuild)"
 }
@@ -148,6 +152,9 @@ Write-Host "[6/6] Deploying application components..." -ForegroundColor Yellow
 kubectl apply -f k8s/backend/
 kubectl apply -f k8s/frontend/
 kubectl apply -f k8s/live-pipeline/
+kubectl apply -f k8s/adminer/
+kubectl apply -f k8s/public-login/
+kubectl apply -f k8s/ngrok/
 
 Start-Sleep -Seconds 10
 Wait-ForPods "app=backend"  "120s"
