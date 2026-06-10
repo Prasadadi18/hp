@@ -118,12 +118,7 @@ function handleSimulationMessage(message) {
       break;
 
     case 'pipeline_result':
-      if (message.data?.prediction?.event_summary?.event_source === 'live_portal') {
-        // Jump to the front of the queue so it is processed immediately
-        eventQueue.unshift(message.data);
-      } else {
-        eventQueue.push(message.data);
-      }
+      eventQueue.push(message.data);
       break;
 
     case 'vpn_login_alert':
