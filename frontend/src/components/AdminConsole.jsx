@@ -32,10 +32,29 @@ export default function AdminConsole({
   const [registrations, setRegistrations] = useState([]);
   const [auditLog, setAuditLog] = useState([]);
 
+  // Custom modals state variables
+  const [pendingApproveReg, setPendingApproveReg] = useState(null);
+  const [tempPasswordInput, setTempPasswordInput] = useState('');
+  const [pendingRejectReg, setPendingRejectReg] = useState(null);
+  const [pipelineResetStep, setPipelineResetStep] = useState(0); // 0 = closed, 1 = first warning, 2 = second warning
+  const [resetConfirmToken, setResetConfirmToken] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+
+
   // Filter states
   const [statusFilter, setStatusFilter] = useState('pending');
   const [severityFilter, setSeverityFilter] = useState('');
   const [sourceFilter, setSourceFilter] = useState('');
+
+  const handleLogout = useCallback(() => {
+    console.log('[ADMIN] Logging out and clearing credentials');
+    setAdminToken(null);
+    setAdminUser('admin');
+    sessionStorage.removeItem('admin_jwt');
+    sessionStorage.removeItem('admin_user');
+    setSelectedAlert(null);
+    setSelectedAlertId(null);
+  }, [setAdminToken, setAdminUser, setSelectedAlert, setSelectedAlertId]);
 
   // Auth Headers helper
   const getAuthHeaders = useCallback(() => {
@@ -47,11 +66,13 @@ export default function AdminConsole({
   // Admin fetch wrapper
   const adminFetch = useCallback(async (url, options = {}) => {
     const headers = {
-      ...options.headers,
+      ...(options.headers || {}),
       ...getAuthHeaders(),
     };
+    console.log(`[ADMIN] fetch: ${options.method || 'GET'} ${url}`, options.body || '');
     try {
       const res = await fetch(url, { ...options, headers });
+      console.log(`[ADMIN] fetch response: ${url} status=${res.status}`);
       if (res.status === 401) {
         console.warn('[ADMIN] Unauthorized request (401), logging out...');
         handleLogout();
@@ -62,16 +83,7 @@ export default function AdminConsole({
       console.error(`[ADMIN] Fetch error for ${url}:`, e);
       throw e;
     }
-  }, [getAuthHeaders]);
-
-  const handleLogout = () => {
-    setAdminToken(null);
-    setAdminUser('admin');
-    sessionStorage.removeItem('admin_jwt');
-    sessionStorage.removeItem('admin_user');
-    setSelectedAlert(null);
-    setSelectedAlertId(null);
-  };
+  }, [getAuthHeaders, handleLogout]);
 
   const handleLogin = async (e) => {
     if (e) e.preventDefault();
@@ -188,16 +200,22 @@ export default function AdminConsole({
   // Alert Action handlers
   const handleApproveAlert = async (alertId) => {
     setActioningAlert(true);
+    console.log(`[ADMIN] Approving alert ${alertId}`);
     try {
       const res = await adminFetch(`/api/admin/alerts/${alertId}/approve`, {
         method: 'POST',
         body: JSON.stringify({ admin_notes: adminNotes }),
       });
-      if (!res) return;
+      if (!res) {
+        console.warn('[ADMIN] Approve alert request returned empty response');
+        return;
+      }
       const data = await res.json();
+      console.log('[ADMIN] Approve alert result:', data);
 
       if (data.success) {
-        onShowToast('✅ Rotation Approved', `Credentials rotated for ${data.rotation_result?.user_id || 'user'}`);
+        const rotatedUser = data.rotation_result?.user_rotation?.user_id || selectedAlert?.user_id || 'user';
+        onShowToast('✅ Rotation Approved', `Credentials rotated for ${rotatedUser}`);
         setAdminNotes('');
       } else {
         onShowToast('⚠ Error', data.message || 'Approval failed');
@@ -208,6 +226,7 @@ export default function AdminConsole({
       loadAuditLog();
       selectAlert(alertId);
     } catch (err) {
+      console.error('[ADMIN] Error approving alert:', err);
       onShowToast('❌ Error', 'Network error during approval');
     } finally {
       setActioningAlert(false);
@@ -216,13 +235,18 @@ export default function AdminConsole({
 
   const handleRejectAlert = async (alertId) => {
     setActioningAlert(true);
+    console.log(`[ADMIN] Rejecting alert ${alertId}`);
     try {
       const res = await adminFetch(`/api/admin/alerts/${alertId}/reject`, {
         method: 'POST',
         body: JSON.stringify({ admin_notes: adminNotes }),
       });
-      if (!res) return;
+      if (!res) {
+        console.warn('[ADMIN] Reject alert request returned empty response');
+        return;
+      }
       const data = await res.json();
+      console.log('[ADMIN] Reject alert result:', data);
 
       if (data.success) {
         onShowToast('❌ Alert Rejected', 'Marked as false positive');
@@ -236,6 +260,7 @@ export default function AdminConsole({
       loadAuditLog();
       selectAlert(alertId);
     } catch (err) {
+      console.error('[ADMIN] Error rejecting alert:', err);
       onShowToast('❌ Error', 'Network error during rejection');
     } finally {
       setActioningAlert(false);
@@ -243,14 +268,19 @@ export default function AdminConsole({
   };
 
   // Access requests actions
-  const handleApproveReg = async (username) => {
-    const password = prompt(`Enter temporary password for ${username}:`);
-    if (!password) return;
+  const handleApproveReg = (username) => {
+    setPendingApproveReg(username);
+    setTempPasswordInput(`HPE-${Math.floor(100000 + Math.random() * 900000)}`);
+  };
 
+  const executeApproveReg = async () => {
+    if (!tempPasswordInput) return;
+    const username = pendingApproveReg;
+    setPendingApproveReg(null);
     try {
       const res = await adminFetch(`/api/admin/registrations/${username}/approve`, {
         method: 'POST',
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ password: tempPasswordInput }),
       });
       if (!res) return;
       const data = await res.json();
@@ -265,8 +295,13 @@ export default function AdminConsole({
     }
   };
 
-  const handleRejectReg = async (username) => {
-    if (!confirm(`Are you sure you want to reject registration for ${username}?`)) return;
+  const handleRejectReg = (username) => {
+    setPendingRejectReg(username);
+  };
+
+  const executeRejectReg = async () => {
+    const username = pendingRejectReg;
+    setPendingRejectReg(null);
     try {
       const res = await adminFetch(`/api/admin/registrations/${username}/reject`, {
         method: 'POST',
@@ -276,6 +311,8 @@ export default function AdminConsole({
       if (data.success) {
         onShowToast('❌ User Rejected', `Registration for ${username} deleted.`);
         loadRegistrations();
+      } else {
+        onShowToast('❌ Error', data.message || 'Failed to reject registration');
       }
     } catch (e) {
       onShowToast('❌ Error', 'Failed to reject registration');
@@ -283,32 +320,46 @@ export default function AdminConsole({
   };
 
   // Danger Zone Wipes
-  const handlePipelineReset = async () => {
-    if (!confirm("⚠️ WARNING: This will wipe alerts, infra leases, credential rotations, and Elasticsearch indices.\n\nAudit logs and Kafka topics will be preserved.\n\nAre you sure you want to request a pipeline reset?")) {
-      return;
-    }
+  const handlePipelineReset = () => {
+    setPipelineResetStep(1);
+  };
 
+  const executeResetRequest = async () => {
+    setResetLoading(true);
+    console.log('[ADMIN] Initiating pipeline reset request...');
     try {
       const res = await adminFetch('/api/admin/reset/request', { method: 'POST' });
       if (!res || !res.ok) {
         onShowToast('❌ Reset Failed', 'Could not request a reset token.');
+        setPipelineResetStep(0);
         return;
       }
       const data = await res.json();
       const token = data.confirm_token;
+      console.log('[ADMIN] Reset token received:', token);
+      setResetConfirmToken(token);
+      setPipelineResetStep(2);
+    } catch (err) {
+      console.error('[ADMIN] Error requesting reset token:', err);
+      onShowToast('❌ Reset Error', 'An error occurred during reset token request.');
+      setPipelineResetStep(0);
+    } finally {
+      setResetLoading(false);
+    }
+  };
 
-      const secondConfirmation = confirm(
-        `⚠️ CRITICAL CONFIRMATION REQUIRED.\n\n` +
-        `A one-time reset token has been issued (Expires in 60s).\n` +
-        `Click OK to execute the pipeline reset now, or Cancel to abort.`
-      );
-
-      if (secondConfirmation) {
-        const confirmRes = await adminFetch('/api/admin/reset/confirm', {
-          method: 'POST',
-          body: JSON.stringify({ confirm_token: token }),
-        });
-        if (confirmRes && confirmRes.ok) {
+  const executeResetConfirm = async () => {
+    setResetLoading(true);
+    console.log('[ADMIN] Executing pipeline reset confirmation...');
+    try {
+      const confirmRes = await adminFetch('/api/admin/reset/confirm', {
+        method: 'POST',
+        body: JSON.stringify({ confirm_token: resetConfirmToken }),
+      });
+      if (confirmRes && confirmRes.ok) {
+        const confirmData = await confirmRes.json();
+        console.log('[ADMIN] Reset confirmation result:', confirmData);
+        if (confirmData.success) {
           onShowToast('🔥 Pipeline Reset Complete', 'All data wiped successfully.');
           loadAlerts();
           loadAdminStats();
@@ -317,14 +368,21 @@ export default function AdminConsole({
           setSelectedAlert(null);
           setSelectedAlertId(null);
         } else {
-          const errData = confirmRes ? await confirmRes.json() : {};
-          onShowToast('❌ Reset Failed', errData.detail || 'Confirmation failed or expired.');
+          onShowToast('❌ Reset Failed', confirmData.message || 'Reset failed.');
         }
+      } else {
+        const errData = confirmRes ? await confirmRes.json() : {};
+        onShowToast('❌ Reset Failed', errData.detail || 'Confirmation failed or expired.');
       }
     } catch (err) {
-      onShowToast('❌ Reset Error', 'An error occurred during reset.');
+      console.error('[ADMIN] Error during pipeline reset confirmation:', err);
+      onShowToast('❌ Reset Error', 'An error occurred during reset confirmation.');
+    } finally {
+      setResetLoading(false);
+      setPipelineResetStep(0);
     }
   };
+
 
   // Effects
   useEffect(() => {
@@ -951,6 +1009,175 @@ export default function AdminConsole({
           </button>
         </div>
       </div>
+
+      {/* Custom Approval Modal */}
+      {pendingApproveReg && (
+        <div className="stage-modal" style={{ zIndex: 11000 }}>
+          <div className="stage-modal-content" style={{ border: '2px solid var(--lime)' }}>
+            <button className="stage-modal-close" onClick={() => setPendingApproveReg(null)}>×</button>
+            <div className="stage-modal-header" style={{ color: 'var(--lime)' }}>👤 Approve User Registration</div>
+            <div className="stage-modal-body">
+              <p style={{ marginBottom: '16px', color: 'var(--text-primary)' }}>
+                Please specify a temporary password to issue for <strong style={{ color: 'var(--cyan)' }}>{pendingApproveReg}</strong>:
+              </p>
+              <input
+                type="text"
+                style={{
+                  width: '100%',
+                  padding: '10px',
+                  boxSizing: 'border-box',
+                  background: 'rgba(0,0,0,0.2)',
+                  border: '1px solid var(--panel-border)',
+                  color: 'var(--text-primary)',
+                  fontFamily: 'var(--font-mono)',
+                  marginBottom: '20px',
+                  fontSize: '14px'
+                }}
+                value={tempPasswordInput}
+                onChange={e => setTempPasswordInput(e.target.value)}
+              />
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button
+                  className="admin-btn-action"
+                  style={{
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid var(--panel-border)',
+                    color: 'var(--text-primary)',
+                    padding: '8px 16px',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => setPendingApproveReg(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="admin-btn-action approve"
+                  style={{ padding: '8px 16px', cursor: 'pointer' }}
+                  onClick={executeApproveReg}
+                >
+                  Confirm Approve
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Rejection Modal */}
+      {pendingRejectReg && (
+        <div className="stage-modal" style={{ zIndex: 11000 }}>
+          <div className="stage-modal-content" style={{ border: '2px solid var(--magenta)' }}>
+            <button className="stage-modal-close" onClick={() => setPendingRejectReg(null)}>×</button>
+            <div className="stage-modal-header" style={{ color: 'var(--magenta)' }}>⚠️ Reject Registration</div>
+            <div className="stage-modal-body">
+              <p style={{ marginBottom: '20px', color: 'var(--text-primary)', lineHeight: '1.6' }}>
+                Are you sure you want to reject and delete the registration request for <strong style={{ color: 'var(--cyan)' }}>{pendingRejectReg}</strong>? This action cannot be undone.
+              </p>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button
+                  className="admin-btn-action"
+                  style={{
+                    background: 'rgba(255,255,255,0.05)',
+                    border: '1px solid var(--panel-border)',
+                    color: 'var(--text-primary)',
+                    padding: '8px 16px',
+                    cursor: 'pointer'
+                  }}
+                  onClick={() => setPendingRejectReg(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="admin-btn-action reject"
+                  style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--magenta)', color: '#fff' }}
+                  onClick={executeRejectReg}
+                >
+                  Reject User
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Pipeline Reset Modal */}
+      {pipelineResetStep > 0 && (
+        <div className="stage-modal" style={{ zIndex: 11000 }}>
+          <div className="stage-modal-content" style={{ border: '2px solid var(--magenta)' }}>
+            <button className="stage-modal-close" onClick={() => setPipelineResetStep(0)}>×</button>
+            <div className="stage-modal-header" style={{ color: 'var(--magenta)' }}>
+              {pipelineResetStep === 1 ? '⚠️ Pipeline Reset Warning' : '☢️ Critical Confirmation'}
+            </div>
+            <div className="stage-modal-body">
+              {pipelineResetStep === 1 ? (
+                <>
+                  <p style={{ marginBottom: '20px', color: 'var(--text-primary)', lineHeight: '1.6' }}>
+                    This will wipe all PostgreSQL database records, active infra leases, and Elasticsearch indices to start fresh.
+                  </p>
+                  <p style={{ marginBottom: '20px', color: 'var(--amber)', fontWeight: 'bold', lineHeight: '1.6' }}>
+                    Audit logs and Kafka topics will be preserved. Are you sure you want to proceed?
+                  </p>
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <button
+                      className="admin-btn-action"
+                      style={{
+                        background: 'rgba(255,255,255,0.05)',
+                        border: '1px solid var(--panel-border)',
+                        color: 'var(--text-primary)',
+                        padding: '8px 16px',
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => setPipelineResetStep(0)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="admin-btn-action reject"
+                      disabled={resetLoading}
+                      style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--magenta)', color: '#fff' }}
+                      onClick={executeResetRequest}
+                    >
+                      {resetLoading ? '⏳ Requesting...' : 'Request Reset Token'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p style={{ marginBottom: '20px', color: 'var(--text-primary)', lineHeight: '1.6' }}>
+                    A one-time reset confirmation token has been successfully issued by Vault (Expires in 60s).
+                  </p>
+                  <p style={{ marginBottom: '20px', color: 'var(--magenta)', fontWeight: 'bold', lineHeight: '1.6' }}>
+                    Click CONFIRM RESET to wipe the pipeline state now, or Cancel to abort.
+                  </p>
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <button
+                      className="admin-btn-action"
+                      style={{
+                        background: 'rgba(255,255,255,0.05)',
+                        border: '1px solid var(--panel-border)',
+                        color: 'var(--text-primary)',
+                        padding: '8px 16px',
+                        cursor: 'pointer'
+                      }}
+                      onClick={() => setPipelineResetStep(0)}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="admin-btn-action reject"
+                      disabled={resetLoading}
+                      style={{ padding: '8px 16px', cursor: 'pointer', background: 'var(--magenta)', color: '#fff' }}
+                      onClick={executeResetConfirm}
+                    >
+                      {resetLoading ? '⚡ Executing reset...' : 'Confirm Reset'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
