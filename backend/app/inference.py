@@ -33,6 +33,7 @@ except ImportError:
 _user_history = defaultdict(lambda: {
     "first_seen_ip": None,
     "prev_ip": None,
+    "prev_region": None,
     "last_event_time": None,
     "ip_hops_30m": 0,
     "admin_actions_15m": 0,
@@ -71,6 +72,7 @@ def get_user_history(user_id: str) -> dict:
                 return {
                     "first_seen_ip": data.get("first_seen_ip") or None,
                     "prev_ip": data.get("prev_ip") or None,
+                    "prev_region": data.get("prev_region") or None,
                     "last_event_time": pd.to_datetime(data["last_event_time"]) if data.get("last_event_time") else None,
                     "ip_hops_30m": int(data.get("ip_hops_30m", 0)),
                     "admin_actions_15m": int(data.get("admin_actions_15m", 0)),
@@ -89,6 +91,7 @@ def save_user_history(user_id: str, hist: dict):
             serialized = {
                 "first_seen_ip": hist["first_seen_ip"] or "",
                 "prev_ip": hist["prev_ip"] or "",
+                "prev_region": hist.get("prev_region") or "",
                 "last_event_time": hist["last_event_time"].isoformat() if hasattr(hist["last_event_time"], "isoformat") else (hist["last_event_time"] or ""),
                 "ip_hops_30m": str(hist["ip_hops_30m"]),
                 "admin_actions_15m": str(hist["admin_actions_15m"]),
@@ -109,6 +112,31 @@ def load_model(model_path: str):
     logger.info(f"Loading models from {model_path} ...")
     try:
         artifacts = joblib.load(model_path)
+        
+        # Check scikit-learn version compatibility
+        try:
+            import sklearn
+            model_sklearn_ver = artifacts.get("sklearn_version")
+            if model_sklearn_ver:
+                sys_ver = sklearn.__version__
+                sys_parts = sys_ver.split(".")
+                model_parts = model_sklearn_ver.split(".")
+                if len(sys_parts) >= 2 and len(model_parts) >= 2:
+                    if sys_parts[0] != model_parts[0] or sys_parts[1] != model_parts[1]:
+                        logger.warning(
+                            f"[Inference] Severe version mismatch: Model was trained on scikit-learn {model_sklearn_ver} "
+                            f"but current system has {sys_ver}. Predictions may be unstable or inaccurate."
+                        )
+                    else:
+                        logger.info(
+                            f"[Inference] Model scikit-learn version {model_sklearn_ver} matches current system."
+                        )
+            else:
+                logger.warning(
+                    "[Inference] Loaded model does not contain version metadata. Version mismatch warnings may occur."
+                )
+        except Exception as ver_err:
+            logger.warning(f"[Inference] Could not validate sklearn version: {ver_err}")
         _xgb_model = artifacts["xgb_model"]
         _lgbm_model = artifacts["lgbm_model"]
         _rf_model = artifacts["rf_model"]
@@ -192,6 +220,53 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         # Merge profile
         user_id = str(event.user_id)
         profile = _user_profiles.get(user_id, {})
+        hist = get_user_history(user_id)
+        
+        # Calculate dynamic impossible travel via speed & coordinates
+        curr_region = event.ip_region
+        prev_region = hist.get("prev_region")
+        
+        _region_coords = {
+            "US-East": (40.71, -74.01),
+            "US-West": (37.77, -122.42),
+            "EU-Central": (50.11, 8.68),
+            "Asia-Pacific": (1.35, 103.82),
+            "South-America": (-23.55, -46.63),
+        }
+        
+        dyn_impossible_travel = 0
+        if prev_region and prev_region != curr_region and hist.get("last_event_time"):
+            coord1 = _region_coords.get(prev_region)
+            coord2 = _region_coords.get(curr_region)
+            if coord1 and coord2:
+                from math import radians, sin, cos, sqrt, atan2
+                lat1, lon1 = map(radians, coord1)
+                lat2, lon2 = map(radians, coord2)
+                dlat = lat2 - lat1
+                dlon = lon2 - lon1
+                a = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
+                c = 2 * atan2(sqrt(a), sqrt(1-a))
+                distance_km = 6371 * c
+                
+                last_time = pd.to_datetime(hist["last_event_time"])
+                curr_time = pd.to_datetime(event.timestamp)
+                if last_time.tzinfo is not None and curr_time.tzinfo is None:
+                    curr_time = curr_time.tz_localize(last_time.tzinfo)
+                elif last_time.tzinfo is None and curr_time.tzinfo is not None:
+                    last_time = last_time.tz_localize(curr_time.tzinfo)
+                time_diff_hours = (curr_time - last_time).total_seconds() / 3600.0
+                
+                if time_diff_hours > 0:
+                    speed_kmh = distance_km / time_diff_hours
+                    if speed_kmh > 900.0:
+                        dyn_impossible_travel = 1
+                        logger.warning(
+                            f"[Inference] Impossible Travel detected for {user_id}: "
+                            f"moved from {prev_region} to {curr_region} ({distance_km:.1f} km) "
+                            f"in {time_diff_hours*3600:.1f}s (Speed: {speed_kmh:.1f} km/h)"
+                        )
+                        
+        hist["prev_region"] = curr_region
         
         # Base DataFrame with single row
         df = pd.DataFrame([{
@@ -242,7 +317,7 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         df['off_hours_non_shift'] = int(df['outside_business_hours'].iloc[0] == 1 and df['shift_worker_int'].iloc[0] == 0)
 
         df['geo_mismatch_int'] = int(df['geo_mismatch'].iloc[0])
-        df['impossible_travel_int'] = int(df['impossible_travel'].iloc[0])
+        df['impossible_travel_int'] = int(df['impossible_travel'].iloc[0] or dyn_impossible_travel)
         df['from_home_region'] = int(df['ip_region'].iloc[0] == df['home_region'].iloc[0])
 
         df['download_deviation'] = df['data_downloaded_mb'].iloc[0] - df['avg_daily_downloads_mb'].iloc[0]
@@ -254,8 +329,6 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         df['high_failed_attempts'] = int(df['failed_attempts_last_15m'].iloc[0] >= 5)
         df['very_high_failed'] = int(df['failed_attempts_last_15m'].iloc[0] >= 8)
         df['success_int'] = int(df['success'].iloc[0])
-        
-        hist = get_user_history(user_id)
         
         # New IP?
         if hist["first_seen_ip"] is None:

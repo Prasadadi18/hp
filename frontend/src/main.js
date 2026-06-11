@@ -60,6 +60,8 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ── WebSocket Simulation ──────────────────────────────────────────────────────
+let simulationReconnectAttempts = 0;
+
 function connectSimulation() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws/simulate`;
@@ -73,6 +75,7 @@ function connectSimulation() {
       console.log('[HPE] WebSocket connected — simulation started');
       isSimulating = true;
       updateConnectionStatus(true);
+      simulationReconnectAttempts = 0; // Reset attempts on success
     };
 
     ws.onmessage = (event) => {
@@ -88,9 +91,7 @@ function connectSimulation() {
       console.log('[HPE] WebSocket disconnected');
       isSimulating = false;
       updateConnectionStatus(false);
-
-      // Reconnect after 5 seconds
-      setTimeout(connectSimulation, 5000);
+      scheduleSimulationReconnect();
     };
 
     ws.onerror = (err) => {
@@ -106,9 +107,22 @@ function connectSimulation() {
     };
   } catch (e) {
     console.error('[HPE] WebSocket connection failed:', e);
-    // Fallback
-    setTimeout(loadAndSimulateLocally, 2000);
+    scheduleSimulationReconnect();
   }
+}
+
+function scheduleSimulationReconnect() {
+  if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) {
+    return;
+  }
+  const baseDelay = 1000;
+  const maxDelay = 30000;
+  const delay = Math.min(maxDelay, baseDelay * Math.pow(2, simulationReconnectAttempts));
+  const jitter = (Math.random() - 0.5) * 0.4 * delay;
+  const reconnectDelay = Math.max(1000, delay + jitter);
+  console.log(`[HPE] Scheduling simulation WebSocket reconnect in ${(reconnectDelay / 1000).toFixed(2)}s (attempt ${simulationReconnectAttempts + 1})`);
+  simulationReconnectAttempts++;
+  setTimeout(connectSimulation, reconnectDelay);
 }
 
 function handleSimulationMessage(message) {

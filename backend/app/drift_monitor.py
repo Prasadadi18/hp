@@ -40,6 +40,7 @@ async def check_model_drift_and_trigger():
                         ]
                     }
                 },
+                "sort": [{"timestamp": {"order": "desc"}}],
                 "size": 100
             }
         )

@@ -58,32 +58,37 @@ class ConnectionManager:
     def start_redis_listener(self, loop: asyncio.AbstractEventLoop):
         """Start background thread listening to Redis channel."""
         self._loop = loop  # Store loop reference for sync broadcast support
-        if not _redis_available:
-            logger.info(f"[WS:{self.name}] Redis unavailable — local mode only")
-            return
 
         def listen():
-            try:
-                import redis
-                redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
-                r = redis.from_url(redis_url, decode_responses=True)
-                ps = r.pubsub()
-                ps.subscribe(self.channel)
-                logger.info(f"[WS:{self.name}] Subscribed to Redis channel: {self.channel}")
+            global _redis_available, _redis_client
+            import time
+            import redis
+            redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
+            while True:
+                try:
+                    r = redis.from_url(redis_url, decode_responses=True)
+                    ps = r.pubsub()
+                    ps.subscribe(self.channel)
+                    logger.info(f"[WS:{self.name}] Subscribed to Redis channel: {self.channel}")
 
-                for message in ps.listen():
-                    if message["type"] != "message":
-                        continue
-                    try:
-                        data = json.loads(message["data"])
-                        # Schedule broadcast on the event loop
-                        asyncio.run_coroutine_threadsafe(
-                            self._local_broadcast(data), loop
-                        )
-                    except Exception as e:
-                        logger.error(f"[WS:{self.name}] Redis message error: {e}")
-            except Exception as e:
-                logger.error(f"[WS:{self.name}] Redis listener crashed: {e}")
+                    _redis_available = True
+                    _redis_client = r
+
+                    for message in ps.listen():
+                        if message["type"] != "message":
+                            continue
+                        try:
+                            data = json.loads(message["data"])
+                            # Schedule broadcast on the event loop
+                            asyncio.run_coroutine_threadsafe(
+                                self._local_broadcast(data), loop
+                            )
+                        except Exception as e:
+                            logger.error(f"[WS:{self.name}] Redis message error: {e}")
+                except Exception as e:
+                    logger.warning(f"[WS:{self.name}] Redis subscriber connection error: {e}. Retrying in 5 seconds...")
+                    _redis_available = False
+                    time.sleep(5)
 
         self._pubsub_thread = threading.Thread(
             target=listen,
@@ -106,12 +111,14 @@ class ConnectionManager:
         Publish to Redis (reaches ALL pods) if available.
         Falls back to local broadcast if Redis is down.
         """
+        global _redis_available
         if _redis_available and _redis_client:
             try:
                 _redis_client.publish(self.channel, json.dumps(data, default=str))
                 return
             except Exception as e:
                 logger.warning(f"[WS:{self.name}] Redis publish failed: {e} — using local broadcast")
+                _redis_available = False
 
         # Fallback: local broadcast only
         await self._local_broadcast(data)
