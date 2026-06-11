@@ -363,7 +363,7 @@ def process_raw_event(raw_event: dict) -> PredictionResult:
     return process_event(event)
 
 
-def process_event(event: NetworkEvent) -> PredictionResult:
+def process_event(event: NetworkEvent, force_rotation: bool = False) -> PredictionResult:
     """
     Process a single event through the FULL pipeline:
     Network → Zeek/Suricata → Beats → Kafka → AI → SOAR → Vault → Rotation → Dist → ELK
@@ -448,16 +448,7 @@ def process_event(event: NetworkEvent) -> PredictionResult:
     stage6 = pipeline_stages.simulate_soar_automation(event_dict, is_threat, ensemble_score)
     stages.append(stage6)
 
-    # REAL: Fire email alert in background thread — pipeline is never blocked
-    if is_threat and threat_action in (ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT):
-        send_threat_alert_async(
-            event_id=event_id,
-            user=event_dict.get("user_id"),
-            source_ip=event_dict.get("source_ip"),
-            threat_score=ensemble_score,
-            action=threat_action.value,
-            reasons=threat_reasons,
-        )
+
 
     # ── Stage 7: HashiCorp Vault (REAL — Human-in-the-Loop) ───────────────────
     # Phase 4: Stage 7 details now reflect the full rotation plan:
@@ -487,7 +478,7 @@ def process_event(event: NetworkEvent) -> PredictionResult:
         ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT
     )
 
-    if is_high_severity and ENABLE_AUTO_USER_ROTATION:
+    if is_high_severity and (ENABLE_AUTO_USER_ROTATION or force_rotation):
         # ── Automatic User Rotation (BLOCK & CRITICAL_ALERT) ──────────────────
         user_rotation_result = vault_client.rotate_credentials(
             reason=f"auto_rotation_{threat_action.value.lower()}_score_{ensemble_score:.4f}",
@@ -506,7 +497,7 @@ def process_event(event: NetworkEvent) -> PredictionResult:
             else None
         )
         
-        if ENABLE_AUTO_USER_ROTATION:
+        if (ENABLE_AUTO_USER_ROTATION or force_rotation):
             # Production mode: user rotation already completed
             if threat_action == ThreatAction.CRITICAL_ALERT:
                 vault_result = {
@@ -608,7 +599,7 @@ def process_event(event: NetworkEvent) -> PredictionResult:
         infra_rot_status = rotation_plan.get("infra_rotation", "not_required")
         affected_service = rotation_plan.get("affected_service")
         
-        if ENABLE_AUTO_USER_ROTATION:
+        if (ENABLE_AUTO_USER_ROTATION or force_rotation):
             # Production mode: user already rotated
             if threat_action == ThreatAction.CRITICAL_ALERT:
                 stage8_status = "completed_user_pending_infra"
@@ -803,8 +794,8 @@ def process_event(event: NetworkEvent) -> PredictionResult:
                 "threat_reasons":           threat_reasons,
                 "is_vpn":                   event_dict.get("is_vpn", False),
                 "user_credentials_rotated": (
-                    "yes_automatically" if (ENABLE_AUTO_USER_ROTATION and user_rotation_result and user_rotation_result.get("success"))
-                    else "pending_approval" if not ENABLE_AUTO_USER_ROTATION
+                    "yes_automatically" if ((ENABLE_AUTO_USER_ROTATION or force_rotation) and user_rotation_result and user_rotation_result.get("success"))
+                    else "pending_approval" if not (ENABLE_AUTO_USER_ROTATION or force_rotation)
                     else "failed"
                 ),
             },
@@ -820,6 +811,19 @@ def process_event(event: NetworkEvent) -> PredictionResult:
     _pending_updates += 1
     if _pending_updates >= _BATCH_SIZE:
         flush_metrics_to_db()
+
+    # REAL: Fire email alert in background thread — pipeline is never blocked
+    if is_threat and threat_action in (ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT):
+        new_password = user_rotation_result.get("new_login_password") if user_rotation_result else None
+        send_threat_alert_async(
+            event_id=event_id,
+            user=event_dict.get("user_id"),
+            source_ip=event_dict.get("source_ip"),
+            threat_score=ensemble_score,
+            action=threat_action.value,
+            reasons=threat_reasons,
+            new_password=new_password,
+        )
 
     return PredictionResult(
         event_id=event_id,

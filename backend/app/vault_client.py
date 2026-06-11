@@ -246,6 +246,17 @@ def _init_all_user_secrets():
         logger.warning("No user profiles loaded — skipping Vault credential seeding")
         return
 
+    import hashlib
+    from app import db
+
+    role_to_dept = {
+        "Developer": "Engineering",
+        "Finance": "Finance",
+        "HR": "HR",
+        "Sales": "Sales",
+        "Admin": "Security"
+    }
+
     created = 0
     updated = 0
     skipped = 0
@@ -253,6 +264,8 @@ def _init_all_user_secrets():
     for profile in _user_profiles:
         user_id = profile.get("user_id", "UNKNOWN")
         vault_path = f"hpe/users/{user_id}"
+        role = profile.get("role", "Employee")
+        dept = role_to_dept.get(role, "Engineering")
 
         try:
             existing = None
@@ -265,53 +278,72 @@ def _init_all_user_secrets():
                 pass
 
             existing_data = existing.get("data", {}).get("data", {}) if existing else {}
+            login_password = None
             
             # Check if secret exists and has correct metadata
             if existing_data:
                 target_role = profile.get("role", "Employee")
                 target_region = profile.get("home_region", "Unknown")
                 
-                # If it exists and matches perfectly, skip
-                if existing_data.get("role") == target_role and existing_data.get("home_region") == target_region:
-                    skipped += 1
-                    continue
+                has_login_password = "login_password" in existing_data
+                login_password = existing_data.get("login_password")
+                if not login_password:
+                    login_password = _generate_password(length=16)
+                    existing_data["login_password"] = login_password
                 
-                # Otherwise, update the fields but preserve credentials
-                existing_data["role"] = target_role
-                existing_data["home_region"] = target_region
+                # If it exists and matches perfectly, skip KV update
+                if existing_data.get("role") == target_role and existing_data.get("home_region") == target_region and has_login_password:
+                    skipped += 1
+                else:
+                    # Otherwise, update the fields but preserve credentials
+                    existing_data["role"] = target_role
+                    existing_data["home_region"] = target_region
+                    _client.secrets.kv.v2.create_or_update_secret(
+                        path=vault_path,
+                        secret=existing_data,
+                    )
+                    updated += 1
+            else:
+                # Creating a new secret
+                login_password = _generate_password(length=16)
+                creds = {
+                    "user_id": user_id,
+                    "role": role,
+                    "home_region": profile.get("home_region", "Unknown"),
+                    "login_password": login_password,
+                    "db_password": _generate_password(),
+                    "api_key": _generate_api_key(),
+                    "service_token": str(uuid.uuid4()),
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "rotation_count": 0,
+                    "status": "active",
+                    "last_rotation_reason": "initial_provisioning",
+                }
+
                 _client.secrets.kv.v2.create_or_update_secret(
                     path=vault_path,
-                    secret=existing_data,
+                    secret=creds,
                 )
-                updated += 1
-                continue
+                created += 1
 
-            # Creating a new secret
-            creds = {
-                "user_id": user_id,
-                "role": profile.get("role", "Employee"),
-                "home_region": profile.get("home_region", "Unknown"),
-                "db_password": _generate_password(),
-                "api_key": _generate_api_key(),
-                "service_token": str(uuid.uuid4()),
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "rotation_count": 0,
-                "status": "active",
-                "last_rotation_reason": "initial_provisioning",
-            }
-
-            _client.secrets.kv.v2.create_or_update_secret(
-                path=vault_path,
-                secret=creds,
+            # Sync to PostgreSQL
+            password_hash = hashlib.sha256(login_password.encode()).hexdigest()
+            db.execute_query(
+                """
+                INSERT INTO hpe_users (username, password_hash, department, status)
+                VALUES (%s, %s, %s, 'active')
+                ON CONFLICT (username)
+                DO UPDATE SET password_hash = EXCLUDED.password_hash, department = EXCLUDED.department, status = 'active'
+                """,
+                (user_id, password_hash, dept)
             )
-            created += 1
 
         except Exception as e:
-            logger.warning(f"Vault: Failed to init credentials for {user_id}: {e}")
+            logger.warning(f"Vault: Failed to init/sync credentials for {user_id}: {e}")
 
     logger.info(
-        f"Vault: Initialized {created} new users, updated {updated} existing users, "
-        f"skipped {skipped} (total users: {len(_user_profiles)})"
+        f"Vault/Postgres Sync: Initialized {created} new users, updated {updated} existing users, "
+        f"skipped {skipped} KV writes, synchronized database rows (total users: {len(_user_profiles)})"
     )
 
 
@@ -354,12 +386,17 @@ def rotate_credentials(reason: str = "threat_detected", user: str = "unknown",
         except Exception:
             pass
 
+        import hashlib
+        from app import db
+
         user_profile = next((p for p in _user_profiles if p.get("user_id") == user), {})
+        new_login_password = _generate_password(length=16)
 
         new_creds = {
             "user_id": user,
             "role": user_profile.get("role", "Unknown"),
             "home_region": user_profile.get("home_region", "Unknown"),
+            "login_password": new_login_password,
             "db_password": _generate_password(),
             "api_key": _generate_api_key(),
             "service_token": str(uuid.uuid4()),
@@ -375,6 +412,13 @@ def rotate_credentials(reason: str = "threat_detected", user: str = "unknown",
             secret=new_creds,
         )
 
+        # Sync to PostgreSQL
+        password_hash = hashlib.sha256(new_login_password.encode()).hexdigest()
+        db.execute_query(
+            "UPDATE hpe_users SET password_hash = %s WHERE username = %s",
+            (password_hash, user)
+        )
+
         logger.info(
             f"Vault: Credentials rotated for {user} "
             f"(rotation #{current_rotation + 1}, reason={reason})"
@@ -383,6 +427,7 @@ def rotate_credentials(reason: str = "threat_detected", user: str = "unknown",
         return {
             "success": True,
             "user_id": user,
+            "new_login_password": new_login_password,
             "rotation_id": str(uuid.uuid4()),
             "rotation_number": current_rotation + 1,
             "global_rotation_count": _rotation_count,
@@ -589,6 +634,20 @@ def get_github_pat() -> Optional[str]:
     except Exception as e:
         logger.warning(f"Vault: Failed to read GITHUB_PAT ({e}) — falling back to environment variable")
     return os.getenv("GITHUB_PAT")
+
+def get_user_login_password_cleartext(user_id: str) -> Optional[str]:
+    if not ensure_connected():
+        return None
+    try:
+        resp = _client.secrets.kv.v2.read_secret_version(
+            path=f"hpe/users/{user_id}",
+            raise_on_deleted_version=False,
+        )
+        data = resp.get("data", {}).get("data", {})
+        return data.get("login_password")
+    except Exception as e:
+        logger.error(f"Vault: Failed to read cleartext password for {user_id}: {e}")
+        return None
 
 def disconnect_vault():
     global _connected, _renewal_stop_event

@@ -26,6 +26,7 @@ def _build_html(
     action: str,
     reasons: List[str],
     timestamp: str,
+    new_password: Optional[str] = None,
 ) -> str:
     """Build a styled HTML email body for the threat alert."""
 
@@ -34,6 +35,32 @@ def _build_html(
     reasons_html = "".join(
         f"<li style='margin-bottom:6px;'>⚠️ {r}</li>" for r in reasons
     ) or "<li>Anomalous behaviour detected by AI models</li>"
+
+    password_section = ""
+    if new_password:
+        password_section = f"""
+        <!-- New Credentials Section -->
+        <tr>
+          <td style="padding:0 40px 24px;">
+            <div style="background:#1a1a1a;border-radius:8px;padding:20px;
+                        border-left:3px solid #01A982;">
+              <p style="margin:0 0 8px;font-size:13px;font-weight:700;
+                        text-transform:uppercase;letter-spacing:1px;color:#01A982;">
+                🔐 New Credentials Issued
+              </p>
+              <p style="margin:0 0 4px;font-size:13px;color:#cccccc;">
+                User: <span style="color:#ffffff;font-weight:600;">{user}</span>
+              </p>
+              <p style="margin:0;font-size:13px;color:#cccccc;">
+                New Password: <code style="background:#222;padding:4px 8px;border-radius:4px;color:#01A982;font-family:monospace;font-size:14px;font-weight:700;">{new_password}</code>
+              </p>
+              <p style="margin:12px 0 0 0;color:#888;font-size:11px;line-height:1.4;">
+                This password has been updated in both HashiCorp Vault and PostgreSQL. The old password is now invalid and the user is locked out until they log back in using these new credentials.
+              </p>
+            </div>
+          </td>
+        </tr>
+        """
 
     return f"""
     <!DOCTYPE html>
@@ -117,6 +144,8 @@ def _build_html(
               </td>
             </tr>
 
+            {password_section}
+
             <!-- Reasons -->
             <tr>
               <td style="padding:0 40px 24px;">
@@ -172,6 +201,7 @@ def _send_email(
     threat_score: float,
     action: str,
     reasons: List[str],
+    new_password: Optional[str] = None,
 ) -> None:
     """Internal: build and send the email via SMTP. Called in background thread."""
     if not config.SOAR_EMAIL_ENABLED:
@@ -194,7 +224,7 @@ def _send_email(
         msg["From"] = f"HPE Security SOAR <{config.SOAR_SENDER_EMAIL}>"
         msg["To"] = config.SOAR_RECEIVER_EMAIL
 
-        html_body = _build_html(event_id, user, source_ip, threat_score, action, reasons, timestamp)
+        html_body = _build_html(event_id, user, source_ip, threat_score, action, reasons, timestamp, new_password)
         msg.attach(MIMEText(html_body, "html"))
 
         with smtplib.SMTP(config.SOAR_SMTP_HOST, config.SOAR_SMTP_PORT, timeout=10) as server:
@@ -222,6 +252,7 @@ def send_threat_alert_async(
     threat_score: float,
     action: str,
     reasons: Optional[List[str]] = None,
+    new_password: Optional[str] = None,
 ) -> None:
     """
     Fire-and-forget: send a threat alert email in a background daemon thread.
@@ -236,6 +267,7 @@ def send_threat_alert_async(
             threat_score,
             action,
             reasons or [],
+            new_password,
         ),
         daemon=True,
         name=f"soar-email-{event_id}",

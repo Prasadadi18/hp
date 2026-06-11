@@ -6,10 +6,14 @@ import logging
 import asyncio
 import threading
 from datetime import datetime, timezone
+from typing import Optional, List, Dict, Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from app import db
+from app import vault_client
+from app.schemas import NetworkEvent, PredictionResult
+from app.threat_engine import process_event
 
 logger = logging.getLogger("hpe.auth")
 router = APIRouter()
@@ -189,7 +193,24 @@ def login(request: LoginRequest, http_req: Request):
             write_zeek_log(request.username, True, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=True)
-            return {"success": True, "message": "Login successful", "department": user['department']}
+            
+            # Get role and user_id
+            profile = next((p for p in vault_client._user_profiles if p.get("user_id") == request.username), None)
+            dept_to_role = {
+                "Engineering": "Developer",
+                "Finance": "Finance",
+                "HR": "HR",
+                "Sales": "Sales",
+                "Security": "Admin"
+            }
+            role = profile.get("role") if profile else dept_to_role.get(user['department'], "Employee")
+            return {
+                "success": True,
+                "message": "Login successful",
+                "department": user['department'],
+                "user_id": request.username,
+                "role": role
+            }
         else:
             # Increment failed attempts on failure
             db.execute_query("UPDATE hpe_users SET failed_attempts = failed_attempts + 1 WHERE username = %s", (request.username,))
@@ -253,4 +274,227 @@ def register(request: RegisterRequest):
     except Exception as e:
         logger.error(f"Database error during registration: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class SimulateRequest(BaseModel):
+    username: str
+    password: str
+    login_hour: Optional[int] = None
+    ip_region: Optional[str] = None
+    data_downloaded_mb: Optional[float] = None
+    failed_attempts: Optional[int] = None
+    impossible_travel: Optional[bool] = None
+    is_vpn: Optional[bool] = None
+
+
+@router.post("/simulate")
+def simulate(request: SimulateRequest, http_req: Request):
+    # Hash password using sha256 to verify against database
+    pass_hash = hashlib.sha256(request.password.encode('utf-8')).hexdigest()
+    
+    # Get client real IP
+    client_ip = http_req.headers.get("x-forwarded-for") or (http_req.client.host if http_req.client else "192.168.1.50")
+    if "," in client_ip:
+        client_ip = client_ip.split(",")[0].strip()
+        
+    try:
+        # 1. Authenticate user
+        query = "SELECT * FROM hpe_users WHERE username = %s"
+        user = db.execute_query(query, (request.username,), fetch=True)
+        
+        if not user or user['password_hash'] != pass_hash:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+            
+        if user.get('status') == 'pending':
+            raise HTTPException(status_code=403, detail="Account awaiting admin approval")
+
+        # 2. Load user baseline profile
+        profile = next((p for p in vault_client._user_profiles if p.get("user_id") == request.username), None)
+        if not profile:
+            profile = {
+                "user_id": request.username,
+                "role": "Developer",
+                "base_login_hour": 9,
+                "login_hour_std_dev": 2.0,
+                "avg_daily_downloads_mb": 50.0,
+                "home_region": "US-East",
+                "remote_worker": False,
+                "is_shift_worker": False,
+                "clumsiness_factor": 0.05
+            }
+
+        # 3. Handle features and overrides
+        home_region = profile.get("home_region", "US-East")
+        selected_ip_region = request.ip_region if request.ip_region else home_region
+        geo_mismatch = (selected_ip_region != home_region)
+        
+        selected_hour = request.login_hour if request.login_hour is not None else datetime.now(timezone.utc).hour
+        selected_downloads = request.data_downloaded_mb if request.data_downloaded_mb is not None else profile.get("avg_daily_downloads_mb", 10.0)
+        selected_failed = request.failed_attempts if request.failed_attempts is not None else 0
+        impossible_travel = bool(request.impossible_travel)
+        is_vpn = bool(request.is_vpn)
+        
+        # Determine anomaly flag
+        is_anomaly = geo_mismatch or is_vpn or impossible_travel or (selected_downloads > 200) or (selected_failed > 3)
+        anomaly_type = "None"
+        if is_vpn:
+            anomaly_type = "VPN Login"
+        elif impossible_travel:
+            anomaly_type = "Impossible Travel"
+        elif geo_mismatch:
+            anomaly_type = "Geographic Anomaly"
+        elif selected_downloads > 200:
+            anomaly_type = "Data Exfiltration"
+        elif selected_failed > 3:
+            anomaly_type = "Credential Stuffing"
+
+        # 4. Construct NetworkEvent
+        event_dict = {
+            "event_id": str(uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "login_hour": selected_hour,
+            "user_id": request.username,
+            "workspace_id": "WS-SIM-001",
+            "source_ip": client_ip,
+            "ip_region": selected_ip_region,
+            "user_region": home_region,
+            "geo_mismatch": geo_mismatch,
+            "impossible_travel": impossible_travel,
+            "action": "login",
+            "success": True,
+            "failed_attempts_last_15m": selected_failed,
+            "data_downloaded_mb": selected_downloads,
+            "role": profile.get("role", "Developer"),
+            "remote_worker": profile.get("remote_worker", False),
+            "base_login_hour": profile.get("base_login_hour", 9.0),
+            "login_hour_std_dev": profile.get("login_hour_std_dev", 2.0),
+            "avg_daily_downloads_mb": profile.get("avg_daily_downloads_mb", 50.0),
+            "home_region": home_region,
+            "is_shift_worker": profile.get("is_shift_worker", False),
+            "clumsiness_factor": profile.get("clumsiness_factor", 0.0),
+            "is_injected_anomaly": is_anomaly,
+            "anomaly_type": anomaly_type,
+            "event_source": "threat_simulation_portal",
+            "is_vpn": is_vpn
+        }
+        
+        event = NetworkEvent(**event_dict)
+        
+        # 5. Process event directly through threat engine (forcing rotation on BLOCK/CRITICAL)
+        result = process_event(event, force_rotation=True)
+        
+        # 6. Write Zeek log for pipeline visibility
+        write_zeek_log(request.username, True, client_ip, is_vpn)
+        
+        # 7. Add credentials rotated flags to output
+        result_data = result.model_dump()
+        
+        rotation_stage = next((s for s in result.pipeline_stages if s.stage_name == "HashiCorp Vault"), None)
+        rotated = False
+        new_password = None
+        
+        if rotation_stage and rotation_stage.status == "rotated":
+            rotated = True
+            new_password = vault_client.get_user_login_password_cleartext(request.username)
+            
+        result_data["credentials_rotated"] = rotated
+        if rotated and new_password:
+            result_data["new_password"] = new_password
+            
+        return result_data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error during threat simulation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/users")
+def get_users():
+    try:
+        query = "SELECT username, department FROM hpe_users WHERE status = 'active'"
+        users = db.execute_query(query, fetch=True, fetch_all=True)
+        if not users:
+            return []
+        
+        dept_to_role = {
+            "Engineering": "Developer",
+            "Finance": "Finance",
+            "HR": "HR",
+            "Sales": "Sales",
+            "Security": "Admin"
+        }
+        
+        results = []
+        for u in users:
+            uname = u["username"]
+            dept = u["department"]
+            profile = next((p for p in vault_client._user_profiles if p.get("user_id") == uname), None)
+            role = profile.get("role") if profile else dept_to_role.get(dept, "Employee")
+            results.append({
+                "user_id": uname,
+                "role": role
+            })
+        results.sort(key=lambda x: x["user_id"])
+        return results
+    except Exception as e:
+        logger.error(f"Error listing users: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/user-profile/{user_id}")
+def get_user_profile(user_id: str):
+    try:
+        profile = next((p for p in vault_client._user_profiles if p.get("user_id") == user_id), None)
+        if profile:
+            return profile
+        
+        query = "SELECT * FROM hpe_users WHERE username = %s"
+        user = db.execute_query(query, (user_id,), fetch=True)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        dept_to_role = {
+            "Engineering": "Developer",
+            "Finance": "Finance",
+            "HR": "HR",
+            "Sales": "Sales",
+            "Security": "Admin"
+        }
+        
+        return {
+            "user_id": user_id,
+            "role": dept_to_role.get(user["department"], "Employee"),
+            "base_login_hour": 9,
+            "login_hour_std_dev": 2.0,
+            "avg_daily_downloads_mb": 10.0,
+            "clumsiness_factor": 0.05,
+            "num_known_devices": 1,
+            "remote_worker": False,
+            "home_region": "US-East",
+            "travel_probability": 0.01,
+            "is_shift_worker": False
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching user profile for {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/user-credential/{user_id}")
+def get_user_credential(user_id: str):
+    try:
+        password = vault_client.get_user_login_password_cleartext(user_id)
+        if not password:
+            if user_id in ["alice", "bob", "charlie", "admin"]:
+                return {"user_id": user_id, "current_password": "password123"}
+            raise HTTPException(status_code=404, detail="Credentials not found in Vault")
+        return {"user_id": user_id, "current_password": password}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reading credential from Vault for {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 

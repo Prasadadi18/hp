@@ -45,6 +45,25 @@ The admin console is protected by **JWT-based authentication** with short-lived 
 * **Append-Only Audit Trail** — The `hpe_admin_audit_log` table is never truncated, even during pipeline resets. Reset actions are explicitly recorded in the audit log with the admin's identity and timestamp.
 * **Safer Pipeline Reset** — Resets wipe derived state (alerts, metrics, leases) but **preserve** the audit log and Kafka topics (topics are flushed, not deleted, preserving event history and consumer offsets).
 
+## Threat Simulation Portal & Role-Based Dashboards
+The Enterprise Login Portal (`http://localhost:8080`) has been enhanced into a full interactive security simulation sandbox:
+
+* **Dynamic Startup Seeding:** At backend startup, the pipeline dynamically syncs and seeds 200 users (from `user_profiles.json`) into HashiCorp Vault KV storage and the PostgreSQL `hpe_users` database.
+* **Demo Credential Helper:** A dropdown menu on the login page allows selecting any of the 200 users. It queries Vault in real-time to fetch the active password and allows autofilling the login form.
+* **Role-Based Dashboards:** Upon authorization, the interface renders a custom workspace tailored to the user's role:
+  * **Developer:** Displays active repository repositories and commit history.
+  * **Finance:** Displays sensitive financial ledgers and mock document downloads.
+  * **HR:** Displays an employee directory table.
+  * **Sales:** Displays active client portfolios and status.
+  * **Admin:** Displays cluster metrics and system status.
+* **Active Password HUD:** Displays the current session password fetched securely from Vault, with a one-click copy button.
+* **Threat Simulation Panel:** Allows admins/users to simulate anomalies (impossible travel, failed attempts, VPN/Proxy usage, geographical mismatches, and data exfiltration via file downloads).
+* **Automated Credential Rotation Lockout:** When a simulation scores as a `BLOCK` or `CRITICAL_ALERT` threat:
+  1. A background SOAR playbook triggers HashiCorp Vault to rotate the user's password.
+  2. The frontend locks the workspace and displays a **⚡ Automated Credential Rotation Completed** panel showing the newly rotated password.
+  3. The SOAR email notifier sends the rotated cleartext credentials to the Security department admin's inbox.
+  4. The user is logged out automatically and must log in using the newly rotated password.
+
 ## Technologies Used
 * **Frontend:** Vanilla JavaScript, Vite, HTML5, CSS3 (Structural Cyber-Bento styling).
 * **3D Visualization:** three-globe / globe.gl (WebGL-accelerated geospatial projections).
@@ -136,10 +155,14 @@ You can log in to the **Enterprise Portal** (`http://localhost:8080/`) using the
 
 | Username | Password | Department / Role | Status |
 |----------|----------|-------------------|--------|
-| `admin` | `admin123` | Security (Admin) | Active |
-| `alice` | `password123` | Engineering | Active |
-| `bob` | `password123` | HR | Active |
-| `charlie` | `password123` | Finance | Active |
+| `admin` | `admin123` | Security (Admin / Audit) | Active |
+| `alice` | `password123` | Engineering (Developer) | Active |
+| `bob` | `password123` | HR (Employee) | Active |
+| `charlie` | `password123` | Finance (Employee) | Active |
+
+#### Dynamic Seeding (Enterprise Database & Vault Sync)
+At startup, the backend dynamically seeds **200 additional user profiles** (loaded from `user_profiles.json`) under IDs `USR-0001` through `USR-0200` into the PostgreSQL `hpe_users` table and HashiCorp Vault.
+To facilitate testing, you can use the **Demo Credential Helper** dropdown directly on the login screen to autofill credentials for any of these 200 users.
 
 ---
 
@@ -467,6 +490,17 @@ Navigate to **http://localhost:5173**. The application will automatically use "L
 | POST | `/api/admin/reset/request` | JWT | Generate a one-time pipeline reset token (60s TTL) |
 | POST | `/api/admin/reset/confirm` | JWT | Execute pipeline reset with a valid confirmation token |
 | WS | `/api/admin/ws` | JWT (query param) | Real-time alert notifications |
+
+### Authentication & Threat Simulation Endpoints
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| POST | `/api/auth/login` | None | Validate user credentials and retrieve user ID and role |
+| POST | `/api/auth/register` | None | Submit a new account registration (pending approval) |
+| POST | `/api/auth/simulate` | None | Run real-time threat simulation with custom geo/VPN/download parameters (forces Vault credential rotation if BLOCK/CRITICAL) |
+| GET | `/api/auth/users` | None | Retrieve list of active portal users and their roles |
+| GET | `/api/auth/user-profile/{user_id}` | None | Get user machine learning baseline profile |
+| GET | `/api/auth/user-credential/{user_id}` | None | Retrieve cleartext login password for a user from HashiCorp Vault |
 
 ---
 
