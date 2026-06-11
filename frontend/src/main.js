@@ -370,34 +370,53 @@ function updateConnectionStatus(connected) {
   if (text) text.textContent = connected ? 'SYSTEM LIVE' : 'LOCAL SIMULATION';
 }
 
-// ── Section Navigation ───────────────────────────────────────────────────────
-function setupSectionNav() {
-  const dots = document.querySelectorAll('.section-nav-dot');
-  const sections = ['globe-section', 'pipeline-section', 'dashboard-section', 'admin-section'];
+// ── Section Navigation (Tabs) ────────────────────────────────────────────────
+export function switchTab(tabId) {
+  console.log(`[HPE] Switching tab to: ${tabId}`);
+  const tabs = document.querySelectorAll('.nav-tab');
+  const sections = document.querySelectorAll('.section');
 
-  dots.forEach((dot, idx) => {
-    dot.addEventListener('click', () => {
-      const section = document.getElementById(sections[idx]);
-      if (section) section.scrollIntoView({ behavior: 'smooth' });
-    });
+  tabs.forEach(tab => {
+    const isTarget = tab.getAttribute('data-tab') === tabId;
+    tab.classList.toggle('active', isTarget);
   });
 
-  // Intersection observer for active dot
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          const idx = sections.indexOf(entry.target.id);
-          dots.forEach((d, i) => d.classList.toggle('active', i === idx));
-        }
-      });
-    },
-    { threshold: 0.5 }
-  );
+  sections.forEach(section => {
+    const isActive = section.id === tabId;
+    section.classList.toggle('active', isActive);
+  });
 
-  sections.forEach(id => {
-    const section = document.getElementById(id);
-    if (section) observer.observe(section);
+  // Custom tab activation actions
+  if (tabId === 'globe-section') {
+    // Trigger window resize event so ThreeJS/GlobeGL scales to container dimensions
+    window.dispatchEvent(new Event('resize'));
+  } else if (tabId === 'adminer-section') {
+    const iframe = document.getElementById('adminer-iframe');
+    if (iframe && !iframe.src) {
+      const hostname = window.location.hostname || 'localhost';
+      iframe.src = `http://${hostname}:9090`;
+      console.log(`[HPE] Resolving Adminer host to: ${iframe.src}`);
+    }
+  } else if (tabId === 'kibana-section') {
+    const iframe = document.getElementById('kibana-iframe');
+    if (iframe && !iframe.src) {
+      const hostname = window.location.hostname || 'localhost';
+      iframe.src = `http://${hostname}:5601`;
+      console.log(`[HPE] Resolving Kibana host to: ${iframe.src}`);
+    }
+  }
+}
+
+// Expose switchTab globally for easy access (e.g. from alerts)
+window.switchTab = switchTab;
+
+function setupSectionNav() {
+  const tabs = document.querySelectorAll('.nav-tab');
+  tabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const tabId = tab.getAttribute('data-tab');
+      switchTab(tabId);
+    });
   });
 }
 

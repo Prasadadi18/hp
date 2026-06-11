@@ -652,22 +652,27 @@ export function showVpnAlert(data) {
     </div>
   `;
 
-  // Click handler to redirect to Admin Console (simulates nav dot click for bulletproof scroll transitions)
+  // Click handler to redirect to Admin Console tab
   banner.addEventListener('click', (e) => {
     // If the close button was clicked, don't redirect
     if (e.target.closest('.vpn-alert-close')) {
       return;
     }
     
-    const dots = document.querySelectorAll('.section-nav-dot');
-    if (dots && dots.length >= 4) {
-      console.log('[HPE] Redirecting to Admin Console via native navigation dot simulation');
-      dots[3].click();
+    if (window.switchTab) {
+      console.log('[HPE] Redirecting to Admin Console via switchTab');
+      window.switchTab('admin-section');
     } else {
-      const adminSection = document.getElementById('admin-section');
-      if (adminSection) {
-        console.log('[HPE] Redirecting to Admin Console via direct scroll fallback');
-        adminSection.scrollIntoView({ behavior: 'smooth' });
+      const adminTab = document.querySelector('.nav-tab[data-tab="admin-section"]');
+      if (adminTab) {
+        console.log('[HPE] Redirecting to Admin Console via tab click simulation');
+        adminTab.click();
+      } else {
+        const adminSection = document.getElementById('admin-section');
+        if (adminSection) {
+          console.log('[HPE] Redirecting to Admin Console via direct scroll fallback');
+          adminSection.scrollIntoView({ behavior: 'smooth' });
+        }
       }
     }
   });

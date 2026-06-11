@@ -114,13 +114,60 @@ body {
 .nav-header {
   position: fixed;
   top: 0; left: 0; right: 0;
+  height: 72px;
   z-index: 100;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-md) var(--space-xl);
-  background: var(--bg-overlay);
-  border-bottom: 1px solid var(--panel-border);
+  padding: 0 var(--space-xl);
+  background: #09090b; /* Solid dark background */
+  border-bottom: 2px solid var(--panel-border);
+  box-sizing: border-box;
+}
+
+/* ── Consolidated Command Tabs (Cyber-Neo-brutalism) ───────────────────── */
+.nav-tabs {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  margin: 0 var(--space-lg);
+}
+
+.nav-tab {
+  background: #18181b; /* Solid zinc 900 */
+  color: var(--text-secondary);
+  border: 2px solid var(--panel-border);
+  border-radius: 0px; /* Flat sharp corners */
+  padding: 8px 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: all 0.15s ease-in-out;
+  box-shadow: 4px 4px 0px var(--bg-void); /* Hard solid shadow */
+}
+
+.nav-tab:hover {
+  color: var(--cyan);
+  border-color: var(--cyan);
+  box-shadow: 4px 4px 0px var(--cyan);
+  transform: translate(-2px, -2px);
+}
+
+.nav-tab.active {
+  background: var(--cyan);
+  color: var(--bg-void);
+  border-color: var(--cyan);
+  box-shadow: 4px 4px 0px var(--panel-border);
+  transform: translate(-2px, -2px);
+}
+
+.nav-tab:active {
+  transform: translate(0px, 0px);
+  box-shadow: 2px 2px 0px var(--bg-void);
 }
 
 .nav-logo {
@@ -192,11 +239,26 @@ body {
 }
 
 /* ── Section Container ─────────────────────────────────────────────────── */
+body {
+  overflow: hidden !important;
+  height: 100vh;
+}
+
 .section {
-  min-height: 100vh;
-  position: relative;
-  padding: var(--space-3xl) var(--space-xl);
-  padding-top: calc(60px + var(--space-3xl));
+  display: none !important;
+  position: absolute;
+  top: 72px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: var(--space-xl);
+  overflow-y: auto;
+  box-sizing: border-box;
+  background: var(--bg-void);
+}
+
+.section.active {
+  display: block !important;
 }
 
 .section-title {
@@ -217,12 +279,27 @@ body {
   line-height: 1.2;
 }
 
+.section-footer {
+  text-align: center;
+  padding: 48px 24px;
+  margin-top: var(--space-3xl);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  border-top: 2px solid var(--panel-border);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
 /* ── Globe Section ─────────────────────────────────────────────────────── */
 #globe-section {
-  padding: 0;
-  position: relative;
-  height: 100vh;
-  overflow: hidden;
+  padding: 0 !important;
+  position: absolute;
+  top: 72px;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  overflow: hidden !important;
 }
 
 #globe-container {
@@ -852,49 +929,45 @@ body {
   color: var(--text-primary);
 }
 
-/* ── Section Nav ───────────────────────────────────────────────────────── */
-.section-nav {
-  position: fixed;
-  right: var(--space-lg);
-  top: 50%;
-  transform: translateY(-50%);
-  z-index: 50;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-md);
-}
-
-.section-nav-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--text-muted);
-  border: none;
-  cursor: pointer;
-  transition: all 0.3s var(--ease-spring);
-  position: relative;
-}
-
-.section-nav-dot.active {
-  background: var(--cyan);
-  box-shadow: 0 0 10px var(--cyan-glow);
-  transform: scale(1.3);
-}
-
-.section-nav-dot:hover {
-  background: var(--cyan-dim);
-}
-
 /* ── Responsive ────────────────────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .nav-tabs {
+    gap: 8px;
+  }
+  .nav-tab {
+    padding: 6px 12px;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+  }
+}
+
 @media (max-width: 768px) {
   .nav-status { display: none; }
-  .section { padding: var(--space-xl) var(--space-md); padding-top: calc(60px + var(--space-xl)); }
+  .nav-header {
+    height: auto;
+    flex-direction: column;
+    align-items: stretch;
+    padding: var(--space-sm) var(--space-md);
+  }
+  .nav-tabs {
+    width: 100%;
+    overflow-x: auto;
+    justify-content: flex-start;
+    padding: 8px 0;
+    margin: var(--space-sm) 0 0 0;
+  }
+  .section {
+    top: 130px;
+    padding: var(--space-md);
+  }
+  #globe-section {
+    top: 130px;
+  }
   .section-heading { font-size: 24px; }
   .hud-value { font-size: 22px; }
   .pipeline-flow { gap: 0; }
   .pipeline-connector { width: 24px; }
   .node-icon-wrapper { width: 48px; height: 48px; }
-  .section-nav { display: none; }
   .globe-hud { display: none; }
   .dashboard-grid { grid-template-columns: 1fr; }
 }
