@@ -100,7 +100,7 @@ export function initGlobe(containerId) {
   globe.controls().minDistance = 150;
   globe.controls().maxDistance = 500;
 
-  pointsData = [{ lat: SERVER.lat, lng: SERVER.lng, is_server: true, label: 'Aegis Core' }];
+  pointsData = [{ lat: SERVER.lat, lng: SERVER.lng, is_server: true, label: 'HPE Core' }];
   globe.pointsData(pointsData);
   globe.ringsData([{ lat: SERVER.lat, lng: SERVER.lng }]);
 
