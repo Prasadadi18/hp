@@ -275,16 +275,27 @@ jobs:
         run: |
           echo "REPO_LOWER=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
 
+      - name: Check if Kubeconfig is configured
+        id: check-kubeconfig
+        run: |
+          if [ -z "$KUBECONFIG_SECRET" ]; then
+            echo "is_configured=false" >> $GITHUB_OUTPUT
+          else
+            echo "is_configured=true" >> $GITHUB_OUTPUT
+          fi
+        env:
+          KUBECONFIG_SECRET: ${{ secrets.KUBECONFIG }}
+
       # Execute only if KUBECONFIG secret is available
       - name: Set up Kubeconfig
-        if: ${{ secrets.KUBECONFIG != '' }}
+        if: steps.check-kubeconfig.outputs.is_configured == 'true'
         run: |
           mkdir -p ~/.kube
           echo "${{ secrets.KUBECONFIG }}" | base64 --decode > ~/.kube/config
           chmod 600 ~/.kube/config
 
       - name: Deploy to Cluster
-        if: ${{ secrets.KUBECONFIG != '' }}
+        if: steps.check-kubeconfig.outputs.is_configured == 'true'
         run: |
           cd k8s
           
@@ -337,7 +348,7 @@ jobs:
           kubectl get pods -n hpe
 
       - name: Log Deploy Skipping
-        if: ${{ secrets.KUBECONFIG == '' }}
+        if: steps.check-kubeconfig.outputs.is_configured == 'false'
         run: |
           echo "=========================================================================="
           echo "  ⚠️ No KUBECONFIG secret found in GitHub Secrets."
