@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Enterprise Access | HPE</title>
+    <title>HPE Threat Simulation Portal</title>
     <!-- Modern premium font -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,14 +13,20 @@
         :root {
             --bg-color: #030305;
             --primary: #01A982;
+            --primary-hover: #008f6d;
             --primary-glow: rgba(1, 169, 130, 0.4);
             --surface: rgba(15, 15, 20, 0.6);
+            --surface-card: rgba(22, 22, 28, 0.7);
             --surface-border: rgba(255, 255, 255, 0.08);
             --text-main: #ffffff;
             --text-muted: #8a8a93;
             --input-bg: rgba(0, 0, 0, 0.3);
             --danger: #ff3366;
             --danger-glow: rgba(255, 51, 102, 0.2);
+            --warning: #f59e0b;
+            --warning-glow: rgba(245, 158, 11, 0.2);
+            --success: #10b981;
+            --success-glow: rgba(16, 185, 129, 0.2);
         }
 
         * {
@@ -33,67 +39,70 @@
         body {
             background-color: var(--bg-color);
             color: var(--text-main);
+            min-height: 100vh;
+            position: relative;
             display: flex;
             justify-content: center;
             align-items: center;
-            min-height: 100vh;
-            overflow: hidden;
-            position: relative;
+            overflow-x: hidden;
         }
 
         /* Ambient animated background */
         .ambient-glow {
-            position: absolute;
-            width: 600px;
-            height: 600px;
-            background: radial-gradient(circle, var(--primary-glow) 0%, transparent 60%);
+            position: fixed;
+            width: 80vw;
+            height: 80vw;
+            max-width: 1000px;
+            max-height: 1000px;
+            background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            filter: blur(80px);
-            opacity: 0.5;
-            animation: pulse-glow 8s ease-in-out infinite alternate;
+            filter: blur(100px);
+            opacity: 0.35;
+            pointer-events: none;
             z-index: 0;
+            animation: pulse-glow 15s ease-in-out infinite alternate;
         }
 
         @keyframes pulse-glow {
-            0% { transform: translate(-50%, -50%) scale(1); opacity: 0.4; }
-            100% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.6; }
+            0% { transform: translate(-50%, -50%) scale(1); opacity: 0.3; }
+            100% { transform: translate(-50%, -50%) scale(1.2); opacity: 0.45; }
         }
 
-        /* Glassmorphism Container */
+        /* Glassmorphism containers */
         .login-wrapper {
             position: relative;
             z-index: 10;
             width: 100%;
-            max-width: 420px;
+            max-width: 440px;
             padding: 20px;
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .glass-card {
             background: var(--surface);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
             border: 1px solid var(--surface-border);
-            border-radius: 16px;
-            padding: 48px 40px;
-            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255,255,255,0.05);
-            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255,255,255,0.05);
         }
 
-        /* Header / Branding */
+        /* Brand Headers */
         .brand-header {
             display: flex;
             align-items: center;
             justify-content: center;
             gap: 12px;
-            margin-bottom: 32px;
+            margin-bottom: 24px;
         }
 
         .brand-logo {
             width: 38px;
             height: 38px;
-            background: linear-gradient(135deg, #01A982 0%, #00765a 100%);
+            background: linear-gradient(135deg, var(--primary) 0%, #00765a 100%);
             border-radius: 10px;
             display: flex;
             align-items: center;
@@ -116,12 +125,11 @@
             -webkit-text-fill-color: transparent;
         }
 
-        /* Typography */
         h2.title {
             text-align: center;
             font-size: 22px;
             font-weight: 500;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             letter-spacing: -0.5px;
         }
 
@@ -129,14 +137,14 @@
             text-align: center;
             color: var(--text-muted);
             font-size: 14px;
-            margin-bottom: 36px;
+            margin-bottom: 30px;
             font-weight: 300;
         }
 
-        /* Form Inputs */
+        /* Input fields */
         .input-group {
             position: relative;
-            margin-bottom: 24px;
+            margin-bottom: 20px;
         }
 
         .input-field {
@@ -161,7 +169,6 @@
             background: rgba(0, 0, 0, 0.5);
         }
 
-        /* Input Icons */
         .input-icon {
             position: absolute;
             left: 16px;
@@ -178,19 +185,17 @@
             color: var(--primary);
         }
 
-        /* Animated Action Button */
+        /* Buttons */
         .submit-btn {
             width: 100%;
             padding: 15px;
-            background: linear-gradient(135deg, #01A982 0%, #008868 100%);
+            background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
             color: white;
             border: none;
             border-radius: 10px;
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
-            position: relative;
-            overflow: hidden;
             transition: all 0.3s ease;
             box-shadow: 0 4px 15px rgba(1, 169, 130, 0.3);
             margin-top: 8px;
@@ -198,7 +203,7 @@
 
         .submit-btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(1, 169, 130, 0.4);
+            box-shadow: 0 8px 25px rgba(1, 169, 130, 0.45);
         }
 
         .submit-btn:active {
@@ -230,11 +235,13 @@
             top: -60px;
             left: 0;
             width: 100%;
+            z-index: 100;
         }
 
         .status-alert.show {
             opacity: 1;
             transform: translateY(0);
+            pointer-events: auto;
         }
 
         .alert-error {
@@ -245,104 +252,629 @@
         }
 
         .alert-success {
-            background: rgba(1, 169, 130, 0.1);
-            border: 1px solid rgba(1, 169, 130, 0.2);
-            color: var(--primary);
-            box-shadow: 0 0 20px var(--primary-glow);
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+            color: var(--success);
+            box-shadow: 0 0 20px var(--success-glow);
         }
 
-        /* Footer & Toggle */
-        .card-footer {
-            margin-top: 32px;
-            text-align: center;
+        /* Credential helper dropdown in login card */
+        .credential-helper {
+            margin-top: 24px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 16px;
             font-size: 13px;
+        }
+
+        .helper-title {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 10px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .select-field {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            border: 1px solid var(--surface-border);
+            border-radius: 8px;
+            padding: 10px;
+            color: white;
+            font-size: 13px;
+            outline: none;
+            margin-bottom: 12px;
+            cursor: pointer;
+        }
+
+        .helper-info {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .helper-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .helper-label {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+
+        .helper-val {
+            font-family: monospace;
+            font-weight: 500;
+        }
+
+        .mini-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            padding: 4px 10px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .mini-btn:hover {
+            background: var(--primary-hover);
+        }
+
+        /* Dashboard View Container */
+        .dashboard-wrapper {
+            position: relative;
+            z-index: 10;
+            width: 100%;
+            max-width: 1280px;
+            padding: 40px 20px;
+            display: grid;
+            grid-template-columns: 280px 1fr 340px;
+            gap: 24px;
+            transition: all 0.5s ease;
+        }
+
+        @media (max-width: 1100px) {
+            .dashboard-wrapper {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Sidebar, Panels */
+        .dashboard-panel {
+            background: var(--surface);
+            backdrop-filter: blur(25px);
+            -webkit-backdrop-filter: blur(25px);
+            border: 1px solid var(--surface-border);
+            border-radius: 16px;
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+            height: fit-content;
+        }
+
+        /* Header in Dashboard */
+        .panel-title {
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            color: var(--primary);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            border-bottom: 1px solid var(--surface-border);
+            padding-bottom: 12px;
+        }
+
+        /* User Profile Details in Sidebar */
+        .profile-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            text-align: center;
+            margin-bottom: 24px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--surface-border);
+        }
+
+        .avatar-circle {
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, var(--primary) 0%, #02382c 100%);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            border: 2px solid var(--surface-border);
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+        }
+
+        .profile-name {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .role-badge {
+            background: rgba(1, 169, 130, 0.15);
+            border: 1px solid var(--primary);
+            color: var(--primary);
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 16px;
+        }
+
+        .profile-stat-box {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.02);
+            border-radius: 10px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .stat-line {
+            display: flex;
+            justify-content: space-between;
             color: var(--text-muted);
         }
 
-        .toggle-link {
-            color: var(--text-main);
-            text-decoration: none;
+        .stat-val {
+            color: white;
             font-weight: 500;
-            transition: color 0.2s ease;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .toggle-link::after {
-            content: '';
-            position: absolute;
-            bottom: -2px;
-            left: 0;
-            width: 100%;
-            height: 1px;
-            background: var(--primary);
-            transform: scaleX(0);
-            transform-origin: right;
-            transition: transform 0.3s ease;
         }
 
-        .toggle-link:hover {
-            color: var(--primary);
+        /* Sidebar copy password block */
+        .active-cred-box {
+            background: rgba(16, 185, 129, 0.05);
+            border: 1px solid rgba(16, 185, 129, 0.15);
+            border-radius: 10px;
+            padding: 14px;
+            font-size: 12px;
+            margin-bottom: 20px;
         }
 
-        .toggle-link:hover::after {
-            transform: scaleX(1);
-            transform-origin: left;
-        }
-
-        .system-badge {
-            margin-top: 24px;
-            display: inline-flex;
+        .cred-box-title {
+            color: var(--success);
+            font-weight: 600;
+            margin-bottom: 6px;
+            display: flex;
             align-items: center;
-            gap: 6px;
-            background: rgba(255, 255, 255, 0.05);
-            padding: 6px 12px;
-            border-radius: 20px;
+            gap: 4px;
+        }
+
+        .cred-display {
+            font-family: monospace;
+            background: rgba(0, 0, 0, 0.4);
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            word-break: break-all;
+            margin-bottom: 8px;
+        }
+
+        /* Role-specific workspace modules */
+        .workspace-card {
+            background: var(--surface-card);
+            border: 1px solid var(--surface-border);
+            border-radius: 14px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.02);
+        }
+
+        .workspace-title {
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .file-list, .repo-list, .employee-list, .client-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .list-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 12px 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.2s;
+        }
+
+        .list-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .item-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .item-name {
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .item-sub {
+            font-size: 11px;
+            color: var(--text-muted);
+        }
+
+        .status-pill {
+            padding: 2px 8px;
+            border-radius: 10px;
             font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .status-active { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+        .status-pending { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+        .status-inactive { background: rgba(255, 51, 102, 0.15); color: var(--danger); }
+
+        /* Sliders / controls styling */
+        .sim-control-group {
+            margin-bottom: 18px;
+        }
+
+        .control-label-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+
+        .control-label {
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .control-val {
+            color: white;
+            font-weight: 600;
+        }
+
+        .control-slider {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255,255,255,0.08);
+            outline: none;
+            -webkit-appearance: none;
+            cursor: pointer;
+        }
+
+        .control-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--primary);
+            box-shadow: 0 0 10px var(--primary-glow);
+            transition: transform 0.1s;
+        }
+
+        .control-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        /* Checkbox toggles */
+        .toggle-switch-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 14px;
+            font-size: 13px;
+        }
+
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 22px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: rgba(255,255,255,0.08);
+            transition: .3s;
+            border-radius: 34px;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 16px;
+            width: 16px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+
+        input:checked + .slider {
+            background-color: var(--primary);
+            box-shadow: 0 0 10px var(--primary-glow);
+        }
+
+        input:checked + .slider:before {
+            transform: translateX(22px);
+        }
+
+        /* Live anomaly indicators list */
+        .live-indicators {
+            margin-top: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            border-top: 1px solid var(--surface-border);
+            padding-top: 16px;
+        }
+
+        .indicator-badge {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            background: rgba(16, 185, 129, 0.05);
+            border: 1px solid rgba(16, 185, 129, 0.1);
+            color: var(--success);
+            transition: all 0.3s ease;
+        }
+
+        .indicator-badge.anomalous {
+            background: rgba(255, 51, 102, 0.08);
+            border-color: rgba(255, 51, 102, 0.2);
+            color: var(--danger);
+            animation: pulse-border 2s infinite alternate;
+        }
+
+        .indicator-badge.elevated {
+            background: rgba(245, 158, 11, 0.08);
+            border-color: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+        }
+
+        @keyframes pulse-border {
+            0% { box-shadow: 0 0 4px rgba(255, 51, 102, 0.1); }
+            100% { box-shadow: 0 0 12px rgba(255, 51, 102, 0.3); }
+        }
+
+        /* Overlay results screen */
+        .result-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(3, 3, 5, 0.85);
+            backdrop-filter: blur(20px);
+            z-index: 1000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.4s ease;
+        }
+
+        .result-overlay.show {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .result-card {
+            background: #111115;
+            border: 1px solid var(--surface-border);
+            border-radius: 20px;
+            width: 100%;
+            max-width: 580px;
+            padding: 36px;
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.8);
+            transform: scale(0.9);
+            transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .result-overlay.show .result-card {
+            transform: scale(1);
+        }
+
+        .result-header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .result-status {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 700;
             letter-spacing: 1px;
             text-transform: uppercase;
-            border: 1px solid rgba(255,255,255,0.05);
+            margin-bottom: 12px;
         }
 
-        .system-dot {
-            width: 6px;
-            height: 6px;
-            background: var(--primary);
-            border-radius: 50%;
-            box-shadow: 0 0 8px var(--primary);
-            animation: blink 2s infinite;
+        .status-allow { background: rgba(16, 185, 129, 0.15); border: 1px solid var(--success); color: var(--success); }
+        .status-monitor { background: rgba(245, 158, 11, 0.15); border: 1px solid var(--warning); color: var(--warning); }
+        .status-block { background: rgba(255, 51, 102, 0.15); border: 1px solid var(--danger); color: var(--danger); }
+        .status-critical { background: rgba(255, 51, 102, 0.25); border: 2px solid var(--danger); color: var(--danger); box-shadow: 0 0 15px rgba(255, 51, 102, 0.4); }
+
+        .result-scores {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
         }
 
-        @keyframes blink {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.4; }
+        .score-box {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--surface-border);
+            border-radius: 10px;
+            padding: 12px;
+            text-align: center;
         }
 
-        /* Animations */
-        .fade-enter {
-            opacity: 0;
-            transform: translateY(10px);
-        }
-        .fade-enter-active {
-            opacity: 1;
-            transform: translateY(0);
-            transition: opacity 300ms, transform 300ms;
-        }
-        .fade-exit {
-            opacity: 1;
-            transform: translateY(0);
-        }
-        .fade-exit-active {
-            opacity: 0;
-            transform: translateY(-10px);
-            transition: opacity 300ms, transform 300ms;
-            display: none;
+        .score-lbl {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin-bottom: 4px;
         }
 
-        /* SVG Icons Inline */
-        svg {
-            display: inline-block;
-            vertical-align: middle;
+        .score-val {
+            font-size: 18px;
+            font-weight: 700;
+            font-family: monospace;
+        }
+
+        .reasons-box {
+            background: rgba(0,0,0,0.3);
+            border-radius: 10px;
+            padding: 16px;
+            margin-bottom: 24px;
+            border-left: 3px solid var(--primary);
+        }
+
+        .reasons-box.threat {
+            border-left-color: var(--danger);
+        }
+
+        .reasons-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .reasons-list {
+            list-style: none;
+            font-size: 13px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .rotation-notice-box {
+            background: rgba(16, 185, 129, 0.06);
+            border: 1px solid rgba(16, 185, 129, 0.15);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+
+        .rotation-notice-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--success);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .rotation-new-pwd-card {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 8px;
+            padding: 14px;
+            font-family: monospace;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 700;
+            color: var(--success);
+            border: 1px dashed rgba(16, 185, 129, 0.3);
+            margin-bottom: 12px;
+        }
+
+        .rotation-warning {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .close-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--surface-border);
+            color: white;
+            padding: 12px;
+            border-radius: 10px;
+            cursor: pointer;
+            width: 100%;
+            font-weight: 600;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .close-btn:hover {
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .hpe-link-span {
+            margin-top: 14px;
+            font-size: 12px;
+        }
+
+        .hpe-link-span a {
+            color: var(--primary);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .hpe-link-span a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
@@ -350,7 +882,8 @@
 
     <div class="ambient-glow"></div>
 
-    <div class="login-wrapper">
+    <!-- ── 1. LOGIN WRAPPER ── -->
+    <div class="login-wrapper" id="loginWrapper">
         <div id="alertBox" class="status-alert">
             <svg id="alertIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></svg>
             <span id="alertText"></span>
@@ -373,7 +906,7 @@
 
             <form id="authForm">
                 <div class="input-group">
-                    <input type="text" id="username" class="input-field" placeholder="Username (e.g. alice)" required>
+                    <input type="text" id="username" class="input-field" placeholder="Username (e.g. USR-0042)" required>
                     <svg class="input-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                 </div>
                 
@@ -390,6 +923,34 @@
                 <button type="submit" id="submitBtn" class="submit-btn">Authorize</button>
             </form>
 
+            <!-- Credential Helper Dropdown for 200 Users -->
+            <div class="credential-helper" id="loginHelper">
+                <div class="helper-title">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                    Credential Helper
+                </div>
+                <select id="userSelector" class="select-field">
+                    <option value="">Loading users...</option>
+                </select>
+                <div class="helper-info" id="helperInfo" style="display: none;">
+                    <div class="helper-row">
+                        <span class="helper-label">Role / Dept:</span>
+                        <span class="helper-val" id="helperRole">Developer</span>
+                    </div>
+                    <div class="helper-row">
+                        <span class="helper-label">Home Region:</span>
+                        <span class="helper-val" id="helperRegion">US-East</span>
+                    </div>
+                    <div class="helper-row" style="margin-top: 6px;">
+                        <span class="helper-label" style="font-weight:600;color:white;">Current Pass:</span>
+                        <button id="copyPasswordBtn" type="button" class="mini-btn">📋 Autofill</button>
+                    </div>
+                    <div class="helper-row" style="background:rgba(0,0,0,0.5);border-radius:4px;padding:6px;font-family:monospace;font-size:11px;overflow-x:auto;">
+                        <span id="helperPassword" style="color:var(--success);">password123</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="card-footer">
                 <p id="toggleText">New employee? <a class="toggle-link" id="toggleMode">Request access</a></p>
                 <div class="system-badge">
@@ -400,7 +961,369 @@
         </div>
     </div>
 
-    <!-- Hidden config fallback if they ever need it, but out of UI sight -->
+
+    <!-- ── 2. DASHBOARD VIEW (HIDDEN BY DEFAULT) ── -->
+    <div class="dashboard-wrapper" id="dashboardWrapper" style="display: none;">
+        
+        <!-- SIDEBAR Column -->
+        <div class="dashboard-panel">
+            <div class="brand-header" style="justify-content: flex-start; margin-bottom: 20px;">
+                <div class="brand-logo" style="width:30px; height:30px; border-radius:8px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px; height:14px;">
+                        <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+                        <path d="M2 17l10 5 10-5"></path>
+                        <path d="M2 12l10 5 10-5"></path>
+                    </svg>
+                </div>
+                <div class="brand-text" style="font-size: 20px;">HPE Gate</div>
+            </div>
+
+            <div class="profile-card">
+                <div class="avatar-circle" id="userAvatar">U</div>
+                <div class="profile-name" id="userNameDisplay">USR-0042</div>
+                <div class="role-badge" id="userRoleDisplay">Finance</div>
+                
+                <div class="profile-stat-box">
+                    <div class="stat-line">
+                        <span>Home Region:</span>
+                        <span class="stat-val" id="userHomeRegionDisplay">US-East</span>
+                    </div>
+                    <div class="stat-line">
+                        <span>Status:</span>
+                        <span class="stat-val" style="color:var(--success);" id="userStatusDisplay">Active</span>
+                    </div>
+                    <div class="stat-line">
+                        <span>Workspace:</span>
+                        <span class="stat-val">WS-SIM-001</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Dashboard credential copy block -->
+            <div class="active-cred-box">
+                <div class="cred-box-title">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                    Active Password
+                </div>
+                <div class="cred-display">
+                    <span id="dashActivePassword" style="overflow:hidden;text-overflow:ellipsis;">••••••••</span>
+                    <button class="mini-btn" id="dashCopyPassBtn" style="padding: 2px 6px; font-size:10px;">Copy</button>
+                </div>
+                <div style="font-size:10px;color:var(--text-muted);line-height:1.3;">
+                    Synced in HashiCorp Vault. Used for API and portal authentication.
+                </div>
+            </div>
+
+            <button id="logoutBtn" class="close-btn" style="margin-top: auto; border-color: rgba(255,51,102,0.3); color: var(--danger);">Logout Session</button>
+        </div>
+
+        <!-- MAIN Column (Role Specific Panels) -->
+        <div style="display: flex; flex-direction: column; gap: 20px;">
+            <div class="dashboard-panel" style="width: 100%;">
+                <div class="panel-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="2" y1="20" x2="22" y2="20"></line><line x1="12" y1="17" x2="12" y2="20"></line></svg>
+                    Enterprise Portal Dashboard
+                </div>
+
+                <!-- ── DEVELOPER WORKSPACE ── -->
+                <div id="workspaceDeveloper" class="workspace-card" style="display: none;">
+                    <div class="workspace-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--primary);"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                        Developer Repository Access
+                    </div>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Active codebases and CI/CD status within Engineering department.</p>
+                    <div class="repo-list">
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">hpe-cyber-gateway-proxy</span>
+                                <span class="item-sub">Branch: main • Commit: a8d82f3</span>
+                            </div>
+                            <span class="status-pill status-active">Passing</span>
+                        </div>
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">hpe-threat-engine-ml</span>
+                                <span class="item-sub">Branch: dev-ensemble • Commit: f1c2d33</span>
+                            </div>
+                            <span class="status-pill status-active">Passing</span>
+                        </div>
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">hpe-auth-vault-service</span>
+                                <span class="item-sub">Branch: main • Commit: bd3e4f2</span>
+                            </div>
+                            <span class="status-pill status-active">Passing</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── FINANCE WORKSPACE ── -->
+                <div id="workspaceFinance" class="workspace-card" style="display: none;">
+                    <div class="workspace-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--primary);"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                        Corporate Ledger & Reports
+                    </div>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Secure downloads of financial datasets and transaction logs.</p>
+                    <div class="file-list">
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">hpe_q2_revenue_ledger.pdf</span>
+                                <span class="item-sub">Size: 42.4 MB • Sensitivity: HIGH</span>
+                            </div>
+                            <button class="mini-btn file-download-trigger" data-size="42">Download</button>
+                        </div>
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">hpe_global_tax_records.xlsx</span>
+                                <span class="item-sub">Size: 185.1 MB • Sensitivity: CRITICAL</span>
+                            </div>
+                            <button class="mini-btn file-download-trigger" data-size="185">Download</button>
+                        </div>
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">hpe_investor_report_2026.pptx</span>
+                                <span class="item-sub">Size: 14.5 MB • Sensitivity: MEDIUM</span>
+                            </div>
+                            <button class="mini-btn file-download-trigger" data-size="14">Download</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── HR WORKSPACE ── -->
+                <div id="workspaceHR" class="workspace-card" style="display: none;">
+                    <div class="workspace-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--primary);"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                        Employee Records Directory
+                    </div>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Manage user access controls and department directories.</p>
+                    <div class="employee-list">
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">USR-0042 (Finance)</span>
+                                <span class="item-sub">Status: Active • Clearance: Level 3</span>
+                            </div>
+                            <span class="status-pill status-active">Active</span>
+                        </div>
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">USR-0012 (Developer)</span>
+                                <span class="item-sub">Status: Active • Clearance: Level 4</span>
+                            </div>
+                            <span class="status-pill status-active">Active</span>
+                        </div>
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">USR-0085 (Sales)</span>
+                                <span class="item-sub">Status: Awaiting Rotation</span>
+                            </div>
+                            <span class="status-pill status-pending">Warning</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── SALES WORKSPACE ── -->
+                <div id="workspaceSales" class="workspace-card" style="display: none;">
+                    <div class="workspace-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--primary);"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
+                        Client CRM Database
+                    </div>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Active enterprise client leads and account files.</p>
+                    <div class="client-list">
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">Acme Corporation (Global)</span>
+                                <span class="item-sub">Status: Active Account • Revenue: $4.5M</span>
+                            </div>
+                            <span class="status-pill status-active">Client</span>
+                        </div>
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">TechCorp Solutions</span>
+                                <span class="item-sub">Status: Active Account • Revenue: $1.2M</span>
+                            </div>
+                            <span class="status-pill status-active">Client</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── ADMIN WORKSPACE ── -->
+                <div id="workspaceAdmin" class="workspace-card" style="display: none;">
+                    <div class="workspace-title">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--primary);"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                        Security & System Control
+                    </div>
+                    <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">Global infrastructure status and security rotation configs.</p>
+                    <div class="employee-list">
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">HashiCorp Vault Service</span>
+                                <span class="item-sub">Status: Online • AppRole Authentication</span>
+                            </div>
+                            <span class="status-pill status-active">Online</span>
+                        </div>
+                        <div class="list-item">
+                            <div class="item-info">
+                                <span class="item-name">PostgreSQL Database</span>
+                                <span class="item-sub">Status: Online • Pool Size: 10</span>
+                            </div>
+                            <span class="status-pill status-active">Online</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="system-badge" style="margin-top:0;">
+                    <div class="system-dot"></div>
+                    Dynamic Access Token Active
+                </div>
+            </div>
+        </div>
+
+        <!-- RIGHT Column (Threat Simulation Controls) -->
+        <div class="dashboard-panel">
+            <div class="panel-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg>
+                Threat Simulation
+            </div>
+            
+            <p style="font-size:12px;color:var(--text-muted);line-height:1.4;margin-bottom:20px;">
+                Simulate credential leak scenarios with customized behavioral properties.
+            </p>
+
+            <form id="simForm">
+                <!-- HOUR SLIDER -->
+                <div class="sim-control-group">
+                    <div class="control-label-row">
+                        <span class="control-label">Access Time (Hour)</span>
+                        <span class="control-val" id="hourVal">09:00</span>
+                    </div>
+                    <input type="range" id="simHour" min="0" max="23" value="9" class="control-slider">
+                </div>
+
+                <!-- REGION DROPDOWN -->
+                <div class="sim-control-group">
+                    <div class="control-label-row">
+                        <span class="control-label">Access Region (Geo)</span>
+                        <span class="control-val" id="regionVal">US-East</span>
+                    </div>
+                    <select id="simRegion" class="select-field" style="margin-bottom: 0;">
+                        <option value="US-East">US-East (New York)</option>
+                        <option value="US-West">US-West (San Francisco)</option>
+                        <option value="EU-Central">EU-Central (Frankfurt)</option>
+                        <option value="Asia-Pacific">Asia-Pacific (Singapore)</option>
+                        <option value="South-America">South-America (São Paulo)</option>
+                    </select>
+                </div>
+
+                <!-- DOWNLOAD SLIDER -->
+                <div class="sim-control-group" style="margin-top: 18px;">
+                    <div class="control-label-row">
+                        <span class="control-label">Downloads Volume</span>
+                        <span class="control-val" id="downloadVal">10 MB</span>
+                    </div>
+                    <input type="range" id="simDownload" min="0" max="2000" value="10" class="control-slider">
+                </div>
+
+                <!-- FAILED LOGINS -->
+                <div class="sim-control-group">
+                    <div class="control-label-row">
+                        <span class="control-label">Failed Attempts</span>
+                        <span class="control-val" id="failedVal">0</span>
+                    </div>
+                    <input type="range" id="simFailed" min="0" max="10" value="0" class="control-slider">
+                </div>
+
+                <!-- IMPOSSIBLE TRAVEL -->
+                <div class="toggle-switch-row">
+                    <span class="control-label">Impossible Travel</span>
+                    <label class="switch">
+                        <input type="checkbox" id="simTravel">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+
+                <!-- VPN IP TUNNELING -->
+                <div class="toggle-switch-row">
+                    <span class="control-label">VPN Tunnel IP</span>
+                    <label class="switch">
+                        <input type="checkbox" id="simVpn">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+
+                <!-- LIVE ANOMALY DETECTORS -->
+                <div class="live-indicators">
+                    <div class="indicator-badge" id="badgeTime">🟢 Access Time Normal</div>
+                    <div class="indicator-badge" id="badgeGeo">🟢 Region Mismatch: None</div>
+                    <div class="indicator-badge" id="badgeDownload">🟢 Downloads Normal</div>
+                    <div class="indicator-badge" id="badgeFailed">🟢 Login Attempts Safe</div>
+                    <div class="indicator-badge" id="badgeTravel">🟢 Travel Velocity Normal</div>
+                    <div class="indicator-badge" id="badgeVpn">🟢 VPN Tunnel Inactive</div>
+                </div>
+
+                <button type="submit" id="simLaunchBtn" class="submit-btn" style="margin-top:24px; background: linear-gradient(135deg, #01A982 0%, #005a46 100%);">
+                    🚀 Launch Simulation
+                </button>
+            </form>
+        </div>
+
+    </div>
+
+
+    <!-- ── 3. RESULTS OVERLAY SCREEN ── -->
+    <div class="result-overlay" id="resultOverlay">
+        <div class="result-card">
+            <div class="result-header">
+                <span class="result-status" id="resultStatusPill">BLOCK</span>
+                <h2 class="title" style="margin-bottom: 4px;">Simulation Inference Result</h2>
+                <p class="subtitle" style="margin-bottom:0;" id="resultStatusText">Behavior blocked by AI Threat Engine</p>
+            </div>
+
+            <div class="result-scores">
+                <div class="score-box">
+                    <div class="score-lbl">XGBoost Score</div>
+                    <div class="score-val" id="xgbScoreVal">0.0000</div>
+                </div>
+                <div class="score-box">
+                    <div class="score-lbl">LightGBM Score</div>
+                    <div class="score-val" id="lgbScoreVal">0.0000</div>
+                </div>
+                <div class="score-box" style="background: rgba(1,169,130,0.05); border-color: var(--primary);">
+                    <div class="score-lbl" style="color:var(--primary); font-weight:600;">Ensemble Score</div>
+                    <div class="score-val" style="color:var(--primary);" id="ensembleScoreVal">0.0000</div>
+                </div>
+            </div>
+
+            <!-- Reasons list box -->
+            <div class="reasons-box" id="resultReasonsBox">
+                <div class="reasons-title">Engine Flags</div>
+                <ul class="reasons-list" id="resultReasonsList">
+                    <li>No anomalies detected</li>
+                </ul>
+            </div>
+
+            <!-- Automated Credential Rotation Sync Card -->
+            <div class="rotation-notice-box" id="rotationNotice" style="display: none;">
+                <div class="rotation-notice-title">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                    ⚡ Automated Credential Rotation Completed
+                </div>
+                <p style="font-size: 13px; color: white; margin-bottom: 12px; font-weight: 500;">
+                    Your account credentials have been rotated to isolate the threat.
+                </p>
+                <div class="rotation-new-pwd-card">
+                    <span id="rotationNewPassword">NEW_PASSWORD_PLACEHOLDER</span>
+                    <button class="mini-btn" id="copyNewPasswordBtn">📋 Copy</button>
+                </div>
+                <p class="rotation-warning">
+                    ⚠️ The old password is now invalid and you have been logged out. Use the new password above or in the administrator SOAR email alert to sign back in.
+                </p>
+            </div>
+
+            <button class="close-btn" id="closeOverlayBtn">Close & Acknowledge</button>
+        </div>
+    </div>
+
+    <!-- Hidden config fallback -->
     <input type="hidden" id="apiUrl" value="">
 
     <script src="app.js"></script>
