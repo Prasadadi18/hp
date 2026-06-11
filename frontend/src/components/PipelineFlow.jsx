@@ -1,0 +1,155 @@
+import React, { useState } from 'react';
+
+const STAGES = [
+  { name: 'Network / Apps', icon: '🌐' },
+  { name: 'Zeek / Suricata', icon: '🛡️' },
+  { name: 'Elastic Beats', icon: '📊' },
+  { name: 'Apache Kafka', icon: '⚡' },
+  { name: 'AI Engine', icon: '🧠' },
+  { name: 'SOAR', icon: '🔄' },
+  { name: 'Vault', icon: '🔐' },
+  { name: 'Cred Rotation', icon: '🔑' },
+  { name: 'Cred Distributed', icon: '📤' },
+  { name: 'ELK / Grafana', icon: '📈' },
+];
+
+const STAGE_EXPLANATIONS = [
+  "We continuously monitor network traffic across the enterprise. Raw data packets (PCAP) from routers and application logs are collected and converted into a standard format, providing the foundational telemetry stream for our security pipeline.",
+  "Traffic passes through an Intrusion Detection System (IDS). Tools like Suricata and Zeek perform Deep Packet Inspection (DPI) to quickly scan for known malicious patterns and extract useful network metadata (like HTTP or DNS info).",
+  "To keep data organized, we use log shippers like Filebeat. They collect raw logs from the IDS, clean them up into a standardized format called the Elastic Common Schema (ECS), and map IP addresses to geographic locations.",
+  "To transport this massive amount of data smoothly, we use Apache Kafka as a high-throughput event streaming broker. It acts as a buffer, ensuring our AI Engine isn't overwhelmed during sudden spikes in network traffic.",
+  "The core brain of the system. Our FastAPI microservice consumes the Kafka stream and engineers complex behavioral features in split-seconds. It relies on an AI ensemble (XGBoost, LightGBM, and Isolation Forest) to predict if an event is a novel threat.",
+  "If the AI flags a threat, our SOAR (Security Orchestration, Automation, and Response) platform takes over. Rather than waiting for a human, it automatically triggers incident response playbooks—like isolating machines or initiating password resets.",
+  "As part of the automated response, HashiCorp Vault is engaged to secure our infrastructure. Vault manages dynamic secrets; when a threat is detected, it receives an API command to immediately begin revoking compromised access.",
+  "Vault executes a secure credential rotation. It instantly invalidates old, hijacked sessions and generates cryptographically secure, brand-new passwords and API keys for our databases and services, effectively locking the attacker out.",
+  "Once new passwords are created, they must be distributed safely. The system automatically pushes these new Vault secrets to our servers and microservices using encrypted tunnels (TLS), restoring security without taking the system offline.",
+  "Finally, every single event—safe traffic or neutralized threat—is permanently recorded. We index all data into an Elasticsearch database, allowing human analysts to search audit logs and view real-time visualizations on Kibana or Grafana."
+];
+
+export default function PipelineFlow({
+  active,
+  activeStage,
+  activeConnector,
+  isThreatFlow,
+  stageLatencies,
+  vaultActive,
+  vaultLines,
+  eventsLog,
+}) {
+  const [selectedStage, setSelectedStage] = useState(null);
+
+  if (!active) return null;
+
+  return (
+    <section className="section active" id="pipeline-section">
+      <div className="section-title">Security Pipeline</div>
+      <h2 className="section-heading">Full Enterprise Pipeline Flow</h2>
+      <p style={{ color: 'var(--text-secondary)', maxWidth: '700px', marginBottom: 'var(--space-lg)', fontSize: '14px', lineHeight: '1.6' }}>
+        Every network event flows through a 10-stage enterprise security pipeline
+        integrated with AI-powered anomaly detection.
+        Watch events flow in real-time — green for safe, red for threats.
+      </p>
+
+      {/* Pipeline Nodes Flowchart */}
+      <div style={{ position: 'relative' }}>
+        <div className="pipeline-flow">
+          {STAGES.map((stage, idx) => {
+            const isNodeActive = activeStage === idx;
+            const isNodeThreat = isThreatFlow && activeStage >= idx && activeStage !== -1;
+            const latency = stageLatencies[idx];
+
+            return (
+              <React.Fragment key={idx}>
+                <div
+                  className={`pipeline-node ${isNodeActive ? 'active' : ''} ${isNodeThreat ? 'threat' : ''}`}
+                  onClick={() => setSelectedStage(idx)}
+                  title="Click to view details"
+                >
+                  <div className="node-icon-wrapper">
+                    <span className="node-icon">{stage.icon}</span>
+                  </div>
+                  <span className="node-name">{stage.name}</span>
+                  <span className="node-latency">{latency ? `${latency}ms` : '--ms'}</span>
+                </div>
+
+                {idx < STAGES.length - 1 && (
+                  <div
+                    className={`pipeline-connector ${activeConnector === idx ? 'active' : ''} ${isThreatFlow && activeConnector >= idx ? 'threat' : ''}`}
+                  >
+                    {activeConnector === idx && (
+                      <div className={`data-packet ${isThreatFlow ? 'threat' : 'safe'}`} />
+                    )}
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Vault Credential Rotation Overlay */}
+      {vaultActive && (
+        <div id="vault-terminal" className="vault-terminal" style={{ display: 'block' }}>
+          <div className="terminal-header">
+            <span className="terminal-icon">🔐</span> HashiCorp Vault — Secure Rotation Protocol
+          </div>
+          <div className="terminal-body">
+            {vaultLines.map((line, idx) => (
+              <div key={idx} className={`terminal-line ${line.class || ''}`}>
+                {line.text}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Stage Explanation Modal */}
+      {selectedStage !== null && (
+        <div id="stage-modal" className="stage-modal" onClick={() => setSelectedStage(null)}>
+          <div className="stage-modal-content" onClick={e => e.stopPropagation()}>
+            <button className="stage-modal-close" onClick={() => setSelectedStage(null)}>×</button>
+            <div className="stage-modal-header">
+              <span style={{ marginRight: '8px' }}>{STAGES[selectedStage].icon}</span>
+              {STAGES[selectedStage].name}
+            </div>
+            <div className="stage-modal-body">{STAGE_EXPLANATIONS[selectedStage]}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Event Logs list */}
+      <div className="pipeline-event-log">
+        {eventsLog.length === 0 ? (
+          <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '12px', padding: 'var(--space-lg)' }}>
+            Waiting for events...
+          </div>
+        ) : (
+          eventsLog.map((event, idx) => {
+            const action = event.threat_action || 'ALLOW';
+            const badgeClass = action === 'ALLOW' ? 'allow'
+              : action === 'MONITOR' ? 'monitor'
+              : action === 'BLOCK' ? 'block'
+              : 'critical';
+
+            return (
+              <div className="pipeline-event" key={idx}>
+                <span className={`event-badge ${badgeClass}`}>{action}</span>
+                <span className="event-user">{event.event_summary?.user || 'unknown'}</span>
+                <span className="event-ip">{event.event_summary?.source_ip || '--'}</span>
+                <span className="event-process">{event.event_summary?.process_name || '--'}</span>
+                <span className="event-score">{(event.threat_score * 100).toFixed(1)}%</span>
+                <span className="event-time">
+                  {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString()}
+                </span>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      <footer className="section-footer">
+        HPE — AI-Powered Network Threat Detection Pipeline — Cyber Command Center
+      </footer>
+    </section>
+  );
+}
