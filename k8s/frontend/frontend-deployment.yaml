@@ -19,7 +19,7 @@ spec:
       containers:
         - name: frontend
           image: hpe-frontend:latest
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5173
               name: http

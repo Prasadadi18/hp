@@ -1,0 +1,349 @@
+# ============================================================================
+# HPE Enterprise Threat Detection — CI/CD Pipeline
+# ============================================================================
+# Triggers on every push/PR. Runs linting, unit tests, integration tests,
+# security scans, then builds & pushes Docker images to GHCR. Finally,
+# deploys the updated manifests to Kubernetes if KUBECONFIG is set.
+# ============================================================================
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  NODE_VERSION: "24"
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  ADMIN_SECRET: "test-secret"
+  REGISTRY: ghcr.io
+
+jobs:
+  # ── 1. Lint & Format Check ──────────────────────────────────────────────────
+  lint:
+    name: "🔍 Lint & Format Check"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-lint-${{ hashFiles('backend/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-lint-
+
+      - name: Install linting tools
+        run: pip install flake8 black isort
+
+      - name: Run flake8 (PEP-8 compliance)
+        run: |
+          flake8 backend/app/ scripts/ export_v2_model.py \
+            --max-line-length=120 \
+            --extend-ignore=E111,E117,E128,E203,E221,E225,E231,E302,E303,E305,E266,E402,F401,F541,F811,F824,F841,W291,W292,W293,W391,W503,W504,E501 \
+            --statistics \
+            --count
+
+      - name: Check Black formatting
+        run: |
+          black --check --diff --line-length=120 \
+            backend/app/ scripts/ export_v2_model.py || true
+
+      - name: Check import ordering
+        run: |
+          isort --check-only --diff --profile black \
+            backend/app/ scripts/ export_v2_model.py || true
+
+  # ── 2. Backend Unit Tests ──────────────────────────────────────────────────
+  test-backend:
+    name: "🧪 Unit Tests"
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-test-${{ hashFiles('backend/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-test-
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Run unit tests with coverage
+        run: |
+          cd backend
+          python -m pytest tests/ \
+            -v --tb=short \
+            --cov=app --cov-report=term-missing --cov-report=xml:coverage.xml \
+            --junitxml=test-results.xml
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: |
+            backend/test-results.xml
+            backend/coverage.xml
+          retention-days: 30
+
+  # ── 3. API Integration Tests ───────────────────────────────────────────────
+  test-integration:
+    name: "🔗 API Integration Tests"
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-integ-${{ hashFiles('backend/requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-integ-
+
+      - name: Install dependencies
+        run: |
+          pip install -r backend/requirements.txt
+          pip install pytest httpx
+
+      - name: Run API integration tests
+        run: |
+          cd backend
+          python -m pytest tests/test_api.py -v --tb=short \
+            --junitxml=integration-results.xml
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-results
+          path: backend/integration-results.xml
+          retention-days: 30
+
+  # ── 4. Security Scanning ───────────────────────────────────────────────────
+  security-scan:
+    name: "🛡️ Security Scan"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install security tools
+        run: pip install bandit safety pip-audit
+
+      - name: Run Bandit (Python security linter)
+        run: |
+          bandit -r backend/app/ export_v2_model.py \
+            -ll --format json --output bandit-report.json \
+            -s B101 || true
+          bandit -r backend/app/ export_v2_model.py \
+            -ll -s B101 || true
+
+      - name: Run pip-audit (dependency vulnerabilities)
+        run: |
+          pip install -r backend/requirements.txt
+          pip-audit --format json --output pip-audit-report.json || true
+          pip-audit || true
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+            pip-audit-report.json
+          retention-days: 30
+
+  # ── 5. Frontend Validation ─────────────────────────────────────────────────
+  test-frontend:
+    name: "🎨 Frontend Build Check"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Cache node_modules
+        uses: actions/cache@v4
+        with:
+          path: frontend/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('frontend/package-lock.json') }}
+          restore-keys: ${{ runner.os }}-node-
+
+      - name: Install & Build
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+
+  # ── 6. Build and Push Images to GHCR ────────────────────────────────────────
+  build-and-push:
+    name: "🐳 Build & Push Images to GHCR"
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-integration, test-frontend, lint, security-scan]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_tag: ${{ steps.prep.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase Repository Name
+        id: prep
+        run: |
+          echo "REPO_LOWER=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+          echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (GHCR)
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & Push Backend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/hpe-backend:latest
+            ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/hpe-backend:${{ github.sha }}
+
+      - name: Build & Push Frontend Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/hpe-frontend:latest
+            ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/hpe-frontend:${{ github.sha }}
+
+  # ── 7. Deploy to Kubernetes (CD) ───────────────────────────────────────────
+  deploy:
+    name: "🚀 Deploy to Kubernetes"
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lowercase Repository Name
+        run: |
+          echo "REPO_LOWER=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      # Execute only if KUBECONFIG secret is available
+      - name: Set up Kubeconfig
+        if: ${{ secrets.KUBECONFIG != '' }}
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG }}" | base64 --decode > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Deploy to Cluster
+        if: ${{ secrets.KUBECONFIG != '' }}
+        run: |
+          cd k8s
+          
+          # Replace local image placeholders with GHCR tagged images
+          sed -i "s|image: hpe-backend:latest|image: ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/hpe-backend:${{ github.sha }}|g" backend/backend-deployment.yaml
+          sed -i "s|image: hpe-backend:latest|image: ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/hpe-backend:${{ github.sha }}|g" backend/backend-migration-job.yaml
+          sed -i "s|image: hpe-frontend:latest|image: ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/hpe-frontend:${{ github.sha }}|g" frontend/frontend-deployment.yaml
+
+          echo "Applying Namespace..."
+          kubectl apply -f namespace.yaml
+          
+          echo "Applying ConfigMaps, Secrets, & PVCs..."
+          kubectl apply -f configmap.yaml
+          kubectl apply -f secrets.yaml
+          kubectl apply -f vault-pvc.yaml
+          
+          echo "Deploying Infrastructure Services..."
+          kubectl apply -f postgres/
+          kubectl apply -f kafka/
+          kubectl apply -f elasticsearch/
+          kubectl apply -f kibana/
+          kubectl apply -f redis/
+          kubectl apply -f vault/
+          
+          echo "Waiting for core infrastructure to be ready..."
+          kubectl wait --for=condition=Ready pod -l app=postgres -n hpe --timeout=180s
+          kubectl wait --for=condition=Ready pod -l app=vault -n hpe --timeout=180s
+          
+          echo "Running Vault initialization..."
+          kubectl delete job vault-init -n hpe --ignore-not-found=true
+          kubectl apply -f vault/vault-init-job.yaml
+          kubectl wait --for=condition=Complete job/vault-init -n hpe --timeout=180s
+          
+          echo "Running Database schema migrations..."
+          kubectl delete job backend-migration -n hpe --ignore-not-found=true
+          kubectl apply -f backend/backend-migration-job.yaml
+          kubectl wait --for=condition=Complete job/backend-migration -n hpe --timeout=180s
+          
+          echo "Deploying Backend and Frontend Components..."
+          kubectl apply -f backend/backend-deployment.yaml
+          kubectl apply -f backend/backend-service.yaml
+          kubectl apply -f frontend/
+          kubectl apply -f live-pipeline/
+          
+          echo "CD Pipeline Rollout Status:"
+          kubectl rollout status deployment/backend -n hpe --timeout=120s
+          kubectl rollout status deployment/frontend -n hpe --timeout=120s
+          
+          echo "Deployment successful!"
+          kubectl get pods -n hpe
+
+      - name: Log Deploy Skipping
+        if: ${{ secrets.KUBECONFIG == '' }}
+        run: |
+          echo "=========================================================================="
+          echo "  ⚠️ No KUBECONFIG secret found in GitHub Secrets."
+          echo "  Skipping Kubernetes deployment stage."
+          echo "  Continuous Delivery was successful: images have been pushed to GHCR."
+          echo "  Image Tags:"
+          echo "    - Backend:  ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/hpe-backend:${{ github.sha }}"
+          echo "    - Frontend: ${{ env.REGISTRY }}/${{ env.REPO_LOWER }}/hpe-frontend:${{ github.sha }}"
+          echo "=========================================================================="

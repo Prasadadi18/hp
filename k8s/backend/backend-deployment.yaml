@@ -60,7 +60,7 @@ spec:
       containers:
         - name: backend
           image: hpe-backend:latest
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef:
                 name: hpe-config
