@@ -18,6 +18,21 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def upgrade() -> None:
+    # Create group roles if they do not exist
+    op.execute("""
+    DO $$
+    BEGIN
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'hpe_db_role') THEN
+            CREATE ROLE hpe_db_role;
+        END IF;
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'hpe_readonly_role') THEN
+            CREATE ROLE hpe_readonly_role;
+        END IF;
+    END
+    $$;
+    """)
+
     op.execute("""
     CREATE TABLE IF NOT EXISTS hpe_audit_logs (
         id           SERIAL PRIMARY KEY,
@@ -144,7 +159,47 @@ depends_on: Union[str, Sequence[str], None] = None
     INSERT INTO hpe_simulation_state (id) VALUES (1) ON CONFLICT DO NOTHING;
     """)
 
+    # Grant privileges on all existing tables/sequences to group roles
+    op.execute("""
+    GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO hpe_db_role;
+    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO hpe_db_role;
+    GRANT SELECT ON ALL TABLES IN SCHEMA public TO hpe_readonly_role;
+
+    -- Alter default privileges for future tables/sequences created by vault-root
+    ALTER DEFAULT PRIVILEGES FOR ROLE "vault-root" IN SCHEMA public
+      GRANT SELECT, INSERT, UPDATE ON TABLES TO hpe_db_role;
+    ALTER DEFAULT PRIVILEGES FOR ROLE "vault-root" IN SCHEMA public
+      GRANT USAGE, SELECT ON SEQUENCES TO hpe_db_role;
+    ALTER DEFAULT PRIVILEGES FOR ROLE "vault-root" IN SCHEMA public
+      GRANT SELECT ON TABLES TO hpe_readonly_role;
+    """)
+
 
 def downgrade() -> None:
     """Downgrade schema."""
-    pass
+    op.execute("""
+    -- Revoke default privileges
+    ALTER DEFAULT PRIVILEGES FOR ROLE "vault-root" IN SCHEMA public
+      REVOKE SELECT, INSERT, UPDATE ON TABLES FROM hpe_db_role;
+    ALTER DEFAULT PRIVILEGES FOR ROLE "vault-root" IN SCHEMA public
+      REVOKE USAGE, SELECT ON SEQUENCES FROM hpe_db_role;
+    ALTER DEFAULT PRIVILEGES FOR ROLE "vault-root" IN SCHEMA public
+      REVOKE SELECT ON TABLES FROM hpe_readonly_role;
+
+    -- Drop tables
+    DROP TABLE IF EXISTS hpe_simulation_state CASCADE;
+    DROP TABLE IF EXISTS hpe_pipeline_metrics CASCADE;
+    DROP TABLE IF EXISTS hpe_threat_metrics CASCADE;
+    DROP TABLE IF EXISTS hpe_admin_audit_log CASCADE;
+    DROP TABLE IF EXISTS hpe_admin_stats CASCADE;
+    DROP TABLE IF EXISTS hpe_admin_alerts CASCADE;
+    DROP TABLE IF EXISTS hpe_users CASCADE;
+    DROP TABLE IF EXISTS hpe_infra_leases CASCADE;
+    DROP TABLE IF EXISTS hpe_credential_rotations CASCADE;
+    DROP TABLE IF EXISTS hpe_audit_logs CASCADE;
+
+    -- Drop group roles
+    DROP ROLE IF EXISTS hpe_db_role;
+    DROP ROLE IF EXISTS hpe_readonly_role;
+    """)
+

@@ -125,13 +125,11 @@ else
     --post-data='{
       "db_name": "hpe-postgres",
       "creation_statements": [
-        "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '\''{{password}}'\'' VALID UNTIL '\''{{expiration}}'\''",
-        "GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public TO \"{{name}}\"",
-        "GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO \"{{name}}\""
+        "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '\''{{password}}'\'' VALID UNTIL '\''{{expiration}}'\'' INHERIT",
+        "GRANT hpe_db_role TO \"{{name}}\""
       ],
       "revocation_statements": [
-        "REASSIGN OWNED BY \"{{name}}\" TO \"vault-root\"",
-        "DROP OWNED BY \"{{name}}\"",
+        "REVOKE hpe_db_role FROM \"{{name}}\"",
         "DROP ROLE IF EXISTS \"{{name}}\""
       ],
       "default_ttl": "1h",
@@ -146,12 +144,11 @@ else
     --post-data='{
       "db_name": "hpe-postgres",
       "creation_statements": [
-        "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '\''{{password}}'\'' VALID UNTIL '\''{{expiration}}'\''",
-        "GRANT SELECT ON ALL TABLES IN SCHEMA public TO \"{{name}}\""
+        "CREATE ROLE \"{{name}}\" WITH LOGIN PASSWORD '\''{{password}}'\'' VALID UNTIL '\''{{expiration}}'\'' INHERIT",
+        "GRANT hpe_readonly_role TO \"{{name}}\""
       ],
       "revocation_statements": [
-        "REASSIGN OWNED BY \"{{name}}\" TO \"vault-root\"",
-        "DROP OWNED BY \"{{name}}\"",
+        "REVOKE hpe_readonly_role FROM \"{{name}}\"",
         "DROP ROLE IF EXISTS \"{{name}}\""
       ],
       "default_ttl": "30m",

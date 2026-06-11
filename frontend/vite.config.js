@@ -1,5 +1,8 @@
 import { defineConfig } from 'vite';
 
+const backendTarget = process.env.BACKEND_TARGET || 'http://backend:8000';
+const wsBackendTarget = backendTarget.replace(/^http/, 'ws');
+
 export default defineConfig({
   root: '.',
   server: {
@@ -8,16 +11,16 @@ export default defineConfig({
     allowedHosts: 'all',
     proxy: {
       '/api/admin/ws': {
-        target: 'ws://backend:8000',
+        target: wsBackendTarget,
         ws: true,
         changeOrigin: true,
       },
       '/api': {
-        target: 'http://backend:8000',
+        target: backendTarget,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://backend:8000',
+        target: wsBackendTarget,
         ws: true,
       },
     },

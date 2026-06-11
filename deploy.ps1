@@ -141,11 +141,25 @@ else {
     kubectl logs job/vault-init -n hpe --tail=5
 }
 
+# ── Phase 5.5: Database Migrations ──────────────────────────────────────────
+Write-Step "5.5" "Running database migrations"
+kubectl delete job backend-migration -n hpe --ignore-not-found=true
+kubectl apply -f k8s/backend/backend-migration-job.yaml
+Write-Host "  Waiting for backend-migration to complete..." -ForegroundColor DarkYellow
+kubectl wait --for=condition=Complete job/backend-migration -n hpe --timeout=120s
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Database migrations failed to run. Log output:" -ForegroundColor Red
+    kubectl logs job/backend-migration -n hpe --tail=50
+    exit 1
+}
+Write-Host "  Database migrations completed successfully." -ForegroundColor Green
+
 # ── Phase 6: App ────────────────────────────────────────────────────────────
 Write-Step "6" "Deploying backend and frontend"
 Write-Host ""
 Write-Host "[6/6] Deploying application components..." -ForegroundColor Yellow
-kubectl apply -f k8s/backend/
+kubectl apply -f k8s/backend/backend-deployment.yaml
+kubectl apply -f k8s/backend/backend-service.yaml
 kubectl apply -f k8s/frontend/
 kubectl apply -f k8s/live-pipeline/
 
