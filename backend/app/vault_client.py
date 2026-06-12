@@ -260,6 +260,7 @@ def _init_all_user_secrets():
     created = 0
     updated = 0
     skipped = 0
+    user_passwords = []  # (user_id, login_password) pairs for the credentials email
 
     for profile in _user_profiles:
         user_id = profile.get("user_id", "UNKNOWN")
@@ -338,6 +339,8 @@ def _init_all_user_secrets():
                 (user_id, password_hash, dept)
             )
 
+            user_passwords.append((user_id, login_password))
+
         except Exception as e:
             logger.warning(f"Vault: Failed to init/sync credentials for {user_id}: {e}")
 
@@ -345,6 +348,15 @@ def _init_all_user_secrets():
         f"Vault/Postgres Sync: Initialized {created} new users, updated {updated} existing users, "
         f"skipped {skipped} KV writes, synchronized database rows (total users: {len(_user_profiles)})"
     )
+
+    # Email the full credential table to the credentials admin on startup
+    # provisioning so they hold the complete password records from the start.
+    try:
+        from app.soar_email import send_vault_init_email
+        send_vault_init_email(user_passwords)
+        logger.info(f"Vault: credential provisioning email dispatched ({len(user_passwords)} users)")
+    except Exception as e:
+        logger.warning(f"Vault: Failed to dispatch credential provisioning email: {e}")
 
 
 def ensure_connected() -> bool:
@@ -419,10 +431,28 @@ def rotate_credentials(reason: str = "threat_detected", user: str = "unknown",
             (password_hash, user)
         )
 
+        # Rotation resolves the incident — reset login memory to a clean
+        # baseline so the next login does not inherit the attacker's session
+        # state (anomalous region, accumulated failures).
+        try:
+            db.execute_query(
+                "UPDATE hpe_users SET failed_attempts = 0, last_login_region = NULL WHERE username = %s",
+                (user,)
+            )
+        except Exception as mem_err:
+            logger.warning(f"Vault: login memory reset failed for {user}: {mem_err}")
+
         logger.info(
             f"Vault: Credentials rotated for {user} "
             f"(rotation #{current_rotation + 1}, reason={reason})"
         )
+
+        # Email the rotated password to the credentials admin
+        try:
+            from app.soar_email import send_rotation_email
+            send_rotation_email(user, new_login_password, reason)
+        except Exception as e:
+            logger.warning(f"Vault: Failed to dispatch rotation email for {user}: {e}")
 
         return {
             "success": True,
@@ -634,6 +664,101 @@ def get_github_pat() -> Optional[str]:
     except Exception as e:
         logger.warning(f"Vault: Failed to read GITHUB_PAT ({e}) — falling back to environment variable")
     return os.getenv("GITHUB_PAT")
+
+_KNOWN_REGIONS = {"US-East", "US-West", "EU-Central", "Asia-Pacific", "South-America"}
+_DEPT_TO_ROLE = {
+    "Engineering": "Developer",
+    "Finance": "Finance",
+    "HR": "HR",
+    "Sales": "Sales",
+    "Security": "Admin",
+}
+
+
+def _department_peer_template(department: str) -> Dict[str, Any]:
+    """
+    Build a behavioral profile for a newly approved hire from the existing
+    workers in their department: same role, a *known* home region (the most
+    common one among peers), and similar behavioral baselines. This ensures the
+    new user gets department-appropriate access and a recognized region instead
+    of an 'Unknown' geo that would immediately trip anomaly detection.
+    """
+    from collections import Counter
+
+    role = _DEPT_TO_ROLE.get(department, "Employee")
+    peers = [p for p in _user_profiles if p.get("role") == role]
+
+    regions = [p.get("home_region") for p in peers if p.get("home_region") in _KNOWN_REGIONS]
+    home_region = Counter(regions).most_common(1)[0][0] if regions else "US-East"
+
+    base = peers[0] if peers else {}
+    return {
+        "role": role,
+        "home_region": home_region,
+        "base_login_hour": base.get("base_login_hour", 9),
+        "login_hour_std_dev": base.get("login_hour_std_dev", 2.0),
+        "avg_daily_downloads_mb": base.get("avg_daily_downloads_mb", 50.0),
+        "remote_worker": base.get("remote_worker", False),
+        "is_shift_worker": base.get("is_shift_worker", False),
+        "clumsiness_factor": base.get("clumsiness_factor", 0.05),
+        "num_known_devices": base.get("num_known_devices", 2),
+        "travel_probability": base.get("travel_probability", 0.01),
+    }
+
+
+def provision_approved_user(user_id: str, department: str, login_password: str) -> Dict[str, Any]:
+    """
+    Provision an admin-approved registrant as a full department member:
+      - create a Vault KV secret holding the admin-set login password
+      - inherit role + known home region + baselines from department peers
+      - register the profile in memory so login / profile / simulate resolve it
+    Returns the assigned profile (always — Vault failure still updates memory so
+    the user can at least log in via the Postgres password).
+    """
+    global _user_profiles
+    tmpl = _department_peer_template(department)
+
+    if ensure_connected():
+        try:
+            creds = {
+                "user_id": user_id,
+                "role": tmpl["role"],
+                "home_region": tmpl["home_region"],
+                "department": department,
+                "login_password": login_password,
+                "db_password": _generate_password(),
+                "api_key": _generate_api_key(),
+                "service_token": str(uuid.uuid4()),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "rotation_count": 0,
+                "status": "active",
+                "last_rotation_reason": "admin_approved_registration",
+            }
+            _client.secrets.kv.v2.create_or_update_secret(
+                path=f"hpe/users/{user_id}",
+                secret=creds,
+            )
+            logger.info(f"Vault: provisioned approved user {user_id} (role={tmpl['role']}, region={tmpl['home_region']})")
+        except Exception as e:
+            logger.error(f"Vault: failed to provision approved user {user_id}: {e}")
+
+    # Register / replace the in-memory profile so role + region resolve everywhere
+    profile = {"user_id": user_id, **tmpl}
+    _user_profiles = [p for p in _user_profiles if p.get("user_id") != user_id]
+    _user_profiles.append(profile)
+
+    # Also register with the inference engine's profile map (keyed by user_id)
+    # so the ML feature engineering uses this user's real department baseline
+    # instead of empty defaults — otherwise a new hire's normal login is scored
+    # as an out-of-distribution anomaly.
+    try:
+        from app import inference
+        inference._user_profiles[user_id] = dict(profile)
+    except Exception as e:
+        logger.warning(f"Could not register {user_id} with inference profiles: {e}")
+
+    return profile
+
 
 def get_user_login_password_cleartext(user_id: str) -> Optional[str]:
     if not ensure_connected():

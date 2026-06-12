@@ -243,6 +243,221 @@ def _send_email(
         logger.warning(f"[SOAR] Email failed (pipeline unaffected): {exc}")
 
 
+# ── Credential emails (Vault init + rotation) ─────────────────────────────────
+
+def _send_html_email(subject: str, html_body: str, receiver: str) -> None:
+    """Internal: send a pre-built HTML email via SMTP. Called in background thread."""
+    if not config.SOAR_EMAIL_ENABLED:
+        logger.debug("SOAR email disabled — skipping email")
+        return
+
+    if not all([config.SOAR_SENDER_EMAIL, config.SOAR_SENDER_PASSWORD, receiver]):
+        logger.warning("SOAR email: missing SMTP credentials or receiver — skipping")
+        return
+
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = f"HPE Security SOAR <{config.SOAR_SENDER_EMAIL}>"
+        msg["To"] = receiver
+        msg.attach(MIMEText(html_body, "html"))
+
+        with smtplib.SMTP(config.SOAR_SMTP_HOST, config.SOAR_SMTP_PORT, timeout=15) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(config.SOAR_SENDER_EMAIL, config.SOAR_SENDER_PASSWORD)
+            server.sendmail(config.SOAR_SENDER_EMAIL, receiver, msg.as_string())
+
+        logger.info(f"[SOAR] Email sent → {receiver} | subject={subject!r}")
+
+    except Exception as exc:
+        logger.warning(f"[SOAR] Email failed (pipeline unaffected): {exc}")
+
+
+def _build_vault_init_html(user_passwords: List[tuple]) -> str:
+    """HTML email with a table of all seeded users and their login passwords."""
+    rows = "".join(
+        f"""<tr>
+              <td style="padding:8px 12px;border-bottom:1px solid #1a1a1a;color:#ffffff;font-family:monospace;font-size:13px;">{uid}</td>
+              <td style="padding:8px 12px;border-bottom:1px solid #1a1a1a;color:#01A982;font-family:monospace;font-size:13px;">{pwd}</td>
+            </tr>"""
+        for uid, pwd in user_passwords
+    )
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0;padding:0;background:#0a0a0a;font-family:Inter,Arial,sans-serif;color:#ffffff;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0a;padding:40px 0;">
+        <tr><td align="center">
+          <table width="580" cellpadding="0" cellspacing="0"
+                 style="background:#111111;border-radius:12px;overflow:hidden;border:1px solid #222222;">
+            <tr><td style="background:#01A982;padding:4px 0;"></td></tr>
+            <tr>
+              <td style="padding:32px 40px 16px;">
+                <h1 style="margin:0;font-size:22px;font-weight:700;color:#01A982;">🔐 Vault Credential Provisioning</h1>
+                <p style="margin:8px 0 0;color:#888888;font-size:13px;">
+                  {len(user_passwords)} user credentials active in HashiCorp Vault — {timestamp}
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:16px 40px 32px;">
+                <table width="100%" cellspacing="0" cellpadding="0" style="background:#1a1a1a;border-radius:8px;overflow:hidden;">
+                  <tr>
+                    <th align="left" style="padding:10px 12px;color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #222;">User ID</th>
+                    <th align="left" style="padding:10px 12px;color:#888;font-size:11px;text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid #222;">Login Password</th>
+                  </tr>
+                  {rows}
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:#0d0d0d;padding:16px 40px;border-top:1px solid #1a1a1a;">
+                <p style="margin:0;font-size:11px;color:#555555;text-align:center;">
+                  HPE Security Pipeline • Vault provisioning record • Keep this email secure
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+    </body>
+    </html>
+    """
+
+
+def _build_rotation_html(user_id: str, new_password: str, reason: str) -> str:
+    """Concise HTML email for a single-user credential rotation."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0;padding:0;background:#0a0a0a;font-family:Inter,Arial,sans-serif;color:#ffffff;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0a;padding:40px 0;">
+        <tr><td align="center">
+          <table width="520" cellpadding="0" cellspacing="0"
+                 style="background:#111111;border-radius:12px;overflow:hidden;border:1px solid #222222;">
+            <tr><td style="background:#01A982;padding:4px 0;"></td></tr>
+            <tr>
+              <td style="padding:28px 36px;">
+                <h1 style="margin:0 0 8px;font-size:20px;font-weight:700;color:#01A982;">🔄 Credentials Rotated</h1>
+                <p style="margin:0 0 16px;color:#888888;font-size:13px;">{timestamp}</p>
+                <p style="margin:0 0 4px;font-size:13px;color:#cccccc;">
+                  User: <span style="color:#ffffff;font-weight:600;">{user_id}</span>
+                </p>
+                <p style="margin:0 0 4px;font-size:13px;color:#cccccc;">
+                  Reason: <span style="color:#ffffff;">{reason}</span>
+                </p>
+                <p style="margin:12px 0 0;font-size:13px;color:#cccccc;">
+                  New Password: <code style="background:#222;padding:4px 8px;border-radius:4px;color:#01A982;font-family:monospace;font-size:14px;font-weight:700;">{new_password}</code>
+                </p>
+                <p style="margin:16px 0 0;color:#888;font-size:11px;line-height:1.4;">
+                  This password is synced in HashiCorp Vault and PostgreSQL. The previous password is now invalid.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+    </body>
+    </html>
+    """
+
+
+def send_vault_init_email(user_passwords: List[tuple]) -> None:
+    """
+    Fire-and-forget: email the credentials admin a table of all seeded users
+    and their login passwords after Vault provisioning. Never blocks startup.
+    """
+    if not user_passwords:
+        return
+    subject = f"🔐 [HPE Vault] Initial Credential Provisioning — {len(user_passwords)} Users Seeded"
+    html = _build_vault_init_html(user_passwords)
+    t = threading.Thread(
+        target=_send_html_email,
+        args=(subject, html, config.CREDENTIALS_RECEIVER_EMAIL),
+        daemon=True,
+        name="soar-email-vault-init",
+    )
+    t.start()
+
+
+def send_rotation_email(user_id: str, new_password: str, reason: str = "credential_rotation") -> None:
+    """
+    Fire-and-forget: email the credentials admin the new password after a
+    user's credentials are rotated. Never blocks the pipeline.
+    """
+    subject = f"🔄 [HPE Vault] Credentials Rotated — {user_id}"
+    html = _build_rotation_html(user_id, new_password, reason)
+    t = threading.Thread(
+        target=_send_html_email,
+        args=(subject, html, config.CREDENTIALS_RECEIVER_EMAIL),
+        daemon=True,
+        name=f"soar-email-rotation-{user_id}",
+    )
+    t.start()
+
+
+def _build_vpn_alert_html(username: str, source_ip: str, vpn_info: dict, login_success: bool) -> str:
+    """HTML email body for a VPN/proxy login detection."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    status = "SUCCESSFUL" if login_success else "FAILED"
+    status_color = "#f59e0b" if login_success else "#ff4a4a"
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <body style="margin:0;padding:0;background:#0a0a0a;font-family:Inter,Arial,sans-serif;color:#ffffff;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="background:#0a0a0a;padding:40px 0;">
+        <tr><td align="center">
+          <table width="540" cellpadding="0" cellspacing="0"
+                 style="background:#111111;border-radius:12px;overflow:hidden;border:1px solid #222222;">
+            <tr><td style="background:{status_color};padding:4px 0;"></td></tr>
+            <tr>
+              <td style="padding:28px 36px 12px;">
+                <h1 style="margin:0;font-size:20px;font-weight:700;color:{status_color};">🛡️ VPN / Proxy Login Detected</h1>
+                <p style="margin:8px 0 0;color:#888888;font-size:13px;">{timestamp}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:8px 36px 28px;">
+                <table width="100%" cellspacing="0" cellpadding="0" style="font-size:13px;color:#cccccc;">
+                  <tr><td style="padding:6px 0;color:#888;">User</td><td style="padding:6px 0;color:#fff;font-weight:600;" align="right">{username}</td></tr>
+                  <tr><td style="padding:6px 0;color:#888;">Login Result</td><td style="padding:6px 0;color:{status_color};font-weight:600;" align="right">{status}</td></tr>
+                  <tr><td style="padding:6px 0;color:#888;">Source IP</td><td style="padding:6px 0;color:#01A982;font-family:monospace;" align="right">{source_ip}</td></tr>
+                  <tr><td style="padding:6px 0;color:#888;">ISP / Provider</td><td style="padding:6px 0;color:#fff;" align="right">{vpn_info.get('isp', 'Unknown')}</td></tr>
+                  <tr><td style="padding:6px 0;color:#888;">Country</td><td style="padding:6px 0;color:#fff;" align="right">{vpn_info.get('country', 'Unknown')}</td></tr>
+                  <tr><td style="padding:6px 0;color:#888;">City / Region</td><td style="padding:6px 0;color:#fff;" align="right">{vpn_info.get('city', 'Unknown')}, {vpn_info.get('region', 'Unknown')}</td></tr>
+                </table>
+                <p style="margin:18px 0 0;color:#888;font-size:11px;line-height:1.5;">
+                  A login was attempted from an anonymizing VPN/proxy IP. Review this access in the HPE Admin Console.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+      </table>
+    </body>
+    </html>
+    """
+
+
+def send_vpn_alert_email(username: str, source_ip: str, vpn_info: dict, login_success: bool) -> None:
+    """
+    Fire-and-forget: email the security admin when a VPN/proxy login is detected.
+    Sent to the SOAR receiver (admin inbox). Never blocks the pipeline.
+    """
+    subject = f"🛡️ [HPE Security] VPN Login Detected — {username} ({vpn_info.get('country', 'Unknown')})"
+    html = _build_vpn_alert_html(username, source_ip, vpn_info, login_success)
+    t = threading.Thread(
+        target=_send_html_email,
+        args=(subject, html, config.SOAR_RECEIVER_EMAIL),
+        daemon=True,
+        name=f"soar-email-vpn-{username}",
+    )
+    t.start()
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def send_threat_alert_async(

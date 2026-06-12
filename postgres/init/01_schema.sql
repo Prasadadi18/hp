@@ -44,16 +44,20 @@ CREATE TABLE IF NOT EXISTS hpe_users (
     password_hash VARCHAR(256), -- Nullable for users awaiting admin approval
     department VARCHAR(64),
     last_login TIMESTAMPTZ,
+    last_login_region VARCHAR(64),
+    last_login_ip VARCHAR(45),
     failed_attempts INT DEFAULT 0,
+    last_failed_attempt TIMESTAMPTZ,
     status VARCHAR(32) DEFAULT 'active'
 );
 -- Using plain hashes for demo simplicity (SHA256)
 -- 'password123' -> ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f
-INSERT INTO hpe_users (username, password_hash, department) VALUES 
+-- 'admin123'    -> 240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9
+INSERT INTO hpe_users (username, password_hash, department) VALUES
 ('alice', 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f', 'Engineering'),
 ('bob', 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f', 'HR'),
 ('charlie', 'ef92b778bafe771e89245b89ecbc08a44a4e166c06659911881f383d4473e94f', 'Finance'),
-('admin', '8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918', 'Security')
+('admin', '240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9', 'Security')
 ON CONFLICT DO NOTHING;
 
 

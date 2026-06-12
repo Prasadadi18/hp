@@ -26,6 +26,10 @@ class RegisterRequest(BaseModel):
     username: str
     department: str
 
+# Window within which a region change since the last login counts as
+# impossible travel (you cannot physically relocate regions this fast).
+IMPOSSIBLE_TRAVEL_WINDOW_SECONDS = 6 * 3600
+
 
 # ── VPN / Proxy IP Detection ─────────────────────────────────────────────────
 # Uses ip-api.com (free, 45 req/min) to detect VPN, proxy, and hosting IPs.
@@ -116,6 +120,14 @@ def _broadcast_vpn_alert(username: str, client_ip: str, vpn_info: dict, login_su
     except Exception as e:
         logger.warning(f"Failed to broadcast VPN login alert: {e}")
 
+    # Email the security admin on VPN detection (replaces the old per-CRITICAL
+    # email flood — VPN logins are far lower volume).
+    try:
+        from app.soar_email import send_vpn_alert_email
+        send_vpn_alert_email(username, client_ip, vpn_info, login_success)
+    except Exception as e:
+        logger.warning(f"Failed to send VPN alert email: {e}")
+
 
 def write_zeek_log(username: str, success: bool, request_ip: str, is_vpn: bool = False):
     """Write login attempt as a Zeek TSV log line to be picked up by Filebeat."""
@@ -188,12 +200,25 @@ def login(request: LoginRequest, http_req: Request):
             raise HTTPException(status_code=403, detail="Account awaiting admin approval")
             
         if user['password_hash'] == pass_hash:
-            # Reset failed attempts on success
-            db.execute_query("UPDATE hpe_users SET failed_attempts = 0, last_login = NOW() WHERE username = %s", (request.username,))
-            write_zeek_log(request.username, True, client_ip, is_vpn)
-            if is_vpn:
-                _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=True)
-            
+            # Capture login memory BEFORE resetting — the accumulated failed
+            # attempts and previous session info are returned to the frontend.
+            prev_failed_attempts = user.get('failed_attempts') or 0
+            prev_last_login = user.get('last_login')
+            prev_last_region = user.get('last_login_region')
+            prev_last_failed = user.get('last_failed_attempt')
+
+            # Brute-force lockout: a successful login that immediately follows
+            # more than 5 failed attempts inside the 5-minute window is treated
+            # as a likely credential-stuffing success — rotate the credentials
+            # right away so the attacker's password is invalidated.
+            brute_force_login = False
+            if prev_failed_attempts > 5 and prev_last_failed:
+                try:
+                    elapsed = (datetime.now(timezone.utc) - prev_last_failed).total_seconds()
+                    brute_force_login = elapsed < 300
+                except Exception:
+                    brute_force_login = False
+
             # Get role and user_id
             profile = next((p for p in vault_client._user_profiles if p.get("user_id") == request.username), None)
             dept_to_role = {
@@ -204,16 +229,81 @@ def login(request: LoginRequest, http_req: Request):
                 "Security": "Admin"
             }
             role = profile.get("role") if profile else dept_to_role.get(user['department'], "Employee")
+            home_region = (profile or {}).get("home_region", "US-East")
+
+            # Reset failed attempts and record this session. A fresh login
+            # always starts at the clean HOME baseline — stale regions from
+            # earlier simulations must never leak into a new session. Region
+            # memory only moves within a session, via simulations.
+            try:
+                db.execute_query(
+                    "UPDATE hpe_users SET failed_attempts = 0, last_login = NOW(), "
+                    "last_login_ip = %s, last_login_region = %s "
+                    "WHERE username = %s",
+                    (client_ip, home_region, request.username)
+                )
+            except Exception as mem_err:
+                # Memory columns may not exist on an un-migrated DB — degrade gracefully
+                logger.warning(f"Login memory update failed (falling back): {mem_err}")
+                db.execute_query("UPDATE hpe_users SET failed_attempts = 0, last_login = NOW() WHERE username = %s", (request.username,))
+
+            write_zeek_log(request.username, True, client_ip, is_vpn)
+            if is_vpn:
+                _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=True)
+
+            # ── Brute-force auto-rotation ──────────────────────────────────────
+            # Rotate immediately on the suspicious login. rotate_credentials()
+            # also emails the new password to the security admin and resets the
+            # account's login memory. The portal's session watcher detects the
+            # change within seconds and locks the workspace.
+            credentials_rotated = False
+            if brute_force_login:
+                try:
+                    rot = vault_client.rotate_credentials(
+                        reason=f"brute_force_login_{prev_failed_attempts}_fails_in_5min",
+                        user=request.username,
+                        threat_score=0.99,
+                    )
+                    credentials_rotated = bool(rot.get("success"))
+                    logger.warning(
+                        f"[BRUTE-FORCE] {request.username} logged in after "
+                        f"{prev_failed_attempts} failed attempts within 5 min — "
+                        f"credentials auto-rotated (success={credentials_rotated})"
+                    )
+                except Exception as rot_err:
+                    logger.error(f"Brute-force rotation failed for {request.username}: {rot_err}")
+
             return {
                 "success": True,
                 "message": "Login successful",
                 "department": user['department'],
                 "user_id": request.username,
-                "role": role
+                "role": role,
+                "failed_attempts": prev_failed_attempts,
+                "last_login": prev_last_login.isoformat() if prev_last_login else None,
+                "last_login_region": home_region,
+                "credentials_rotated": credentials_rotated,
+                "security_notice": (
+                    f"Account was accessed after {prev_failed_attempts} failed attempts in 5 minutes. "
+                    "Credentials have been rotated for your protection."
+                ) if credentials_rotated else None
             }
         else:
-            # Increment failed attempts on failure
-            db.execute_query("UPDATE hpe_users SET failed_attempts = failed_attempts + 1 WHERE username = %s", (request.username,))
+            # Increment failed attempts within a rolling 5-minute window: if the
+            # last failure was over 5 minutes ago, the burst is stale — start a
+            # new window at 1. Otherwise keep counting up.
+            try:
+                db.execute_query(
+                    "UPDATE hpe_users SET "
+                    "failed_attempts = CASE WHEN last_failed_attempt > NOW() - INTERVAL '5 minutes' "
+                    "                       THEN failed_attempts + 1 ELSE 1 END, "
+                    "last_failed_attempt = NOW() "
+                    "WHERE username = %s",
+                    (request.username,)
+                )
+            except Exception as fa_err:
+                logger.warning(f"Windowed failed-attempt update failed (falling back): {fa_err}")
+                db.execute_query("UPDATE hpe_users SET failed_attempts = failed_attempts + 1 WHERE username = %s", (request.username,))
             write_zeek_log(request.username, False, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=False)
@@ -330,9 +420,24 @@ def simulate(request: SimulateRequest, http_req: Request):
         
         selected_hour = request.login_hour if request.login_hour is not None else datetime.now(timezone.utc).hour
         selected_downloads = request.data_downloaded_mb if request.data_downloaded_mb is not None else profile.get("avg_daily_downloads_mb", 10.0)
-        selected_failed = request.failed_attempts if request.failed_attempts is not None else 0
-        impossible_travel = bool(request.impossible_travel)
+        selected_failed = request.failed_attempts if request.failed_attempts is not None else (user.get('failed_attempts') or 0)
         is_vpn = bool(request.is_vpn)
+
+        # Impossible travel: explicit override wins; otherwise auto-detect from
+        # login memory — the user picked a different region than their previous
+        # login within a window too short to physically relocate.
+        prev_region = user.get('last_login_region')
+        prev_login = user.get('last_login')
+        if request.impossible_travel is not None:
+            impossible_travel = bool(request.impossible_travel)
+        else:
+            impossible_travel = False
+            if prev_region and prev_login and prev_region != selected_ip_region:
+                try:
+                    elapsed = (datetime.now(timezone.utc) - prev_login).total_seconds()
+                    impossible_travel = elapsed < IMPOSSIBLE_TRAVEL_WINDOW_SECONDS
+                except Exception:
+                    pass
         
         # Determine anomaly flag
         is_anomaly = geo_mismatch or is_vpn or impossible_travel or (selected_downloads > 200) or (selected_failed > 3)
@@ -385,17 +490,37 @@ def simulate(request: SimulateRequest, http_req: Request):
         
         # 6. Write Zeek log for pipeline visibility
         write_zeek_log(request.username, True, client_ip, is_vpn)
-        
+
         # 7. Add credentials rotated flags to output
         result_data = result.model_dump()
-        
+
         rotation_stage = next((s for s in result.pipeline_stages if s.stage_name == "HashiCorp Vault"), None)
         rotated = False
         new_password = None
-        
+
         if rotation_stage and rotation_stage.status == "rotated":
             rotated = True
             new_password = vault_client.get_user_login_password_cleartext(request.username)
+
+        # 7b. Update login memory.
+        #  - No rotation: the simulation becomes the latest access, so the next
+        #    region change from here can be flagged as impossible travel.
+        #  - Rotation: the incident is resolved and the account re-secured —
+        #    reset to a clean baseline (home region, zero failures) so the
+        #    next login does NOT inherit the attacker's session state.
+        try:
+            if rotated:
+                db.execute_query(
+                    "UPDATE hpe_users SET last_login = NOW(), last_login_region = %s, failed_attempts = 0 WHERE username = %s",
+                    (home_region, request.username)
+                )
+            else:
+                db.execute_query(
+                    "UPDATE hpe_users SET last_login = NOW(), last_login_region = %s WHERE username = %s",
+                    (selected_ip_region, request.username)
+                )
+        except Exception as mem_err:
+            logger.warning(f"Simulation login memory update failed: {mem_err}")
             
         result_data["credentials_rotated"] = rotated
         if rotated and new_password:
@@ -407,6 +532,42 @@ def simulate(request: SimulateRequest, http_req: Request):
         raise
     except Exception as e:
         logger.error(f"Error during threat simulation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Curated demo accounts whose passwords are visible in the credential helper.
+# All other users are listed but their passwords are masked on the frontend.
+DEMO_USER_IDS = ["USR-0001", "USR-0002", "USR-0005"]
+
+
+@router.get("/demo-users")
+def get_demo_users():
+    """Return the demo user IDs whose passwords may be shown in the helper."""
+    return {"demo_users": DEMO_USER_IDS}
+
+
+@router.get("/login-history/{user_id}")
+def get_login_history(user_id: str):
+    """Login memory for a user: last session time, region, IP, and failure count."""
+    try:
+        user = db.execute_query(
+            "SELECT last_login, last_login_region, last_login_ip, failed_attempts FROM hpe_users WHERE username = %s",
+            (user_id,), fetch=True
+        )
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        last_login = user.get('last_login')
+        return {
+            "user_id": user_id,
+            "last_login": last_login.isoformat() if last_login else None,
+            "last_login_region": user.get('last_login_region'),
+            "last_login_ip": user.get('last_login_ip'),
+            "failed_attempts": user.get('failed_attempts') or 0
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching login history for {user_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
