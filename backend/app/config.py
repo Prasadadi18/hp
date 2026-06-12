@@ -86,3 +86,7 @@ SOAR_SMTP_PORT        = int(os.getenv("SOAR_SMTP_PORT", "587"))
 SOAR_SENDER_EMAIL     = os.getenv("SOAR_SENDER_EMAIL", "")
 SOAR_SENDER_PASSWORD  = os.getenv("SOAR_SENDER_PASSWORD", "")   # Gmail App Password
 SOAR_RECEIVER_EMAIL   = os.getenv("SOAR_RECEIVER_EMAIL", "")
+
+# Recipient for credential provisioning/rotation emails (Vault init password
+# table and per-user rotation notices). Separate from threat-alert receiver.
+CREDENTIALS_RECEIVER_EMAIL = os.getenv("CREDENTIALS_RECEIVER_EMAIL", "brijeshshettybs05@gmail.com")

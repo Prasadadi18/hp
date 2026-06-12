@@ -33,7 +33,7 @@ The admin dashboard provides:
 * **Approve / Reject Workflow** — One-click credential rotation approval or false positive rejection
 * **Audit Log** — Complete, append-only history of all admin actions with timestamps, admin attribution, and notes
 * **WebSocket Notifications** — Instant toast alerts when new critical threats are detected
-* **User Registration Management** — Approve or reject pending user access requests from the public login portal
+* **User Registration Management** — Approve or reject pending access requests from the public portal. Approval fully provisions the user (Vault secret, department-based role, and a known home region inherited from department peers) and emails the issued credentials
 * **Pipeline Reset (Danger Zone)** — Two-step confirmed reset with one-time token (60s TTL); preserves audit log and Kafka topics
 
 ### Admin Authentication & Security
@@ -45,24 +45,48 @@ The admin console is protected by **JWT-based authentication** with short-lived 
 * **Append-Only Audit Trail** — The `hpe_admin_audit_log` table is never truncated, even during pipeline resets. Reset actions are explicitly recorded in the audit log with the admin's identity and timestamp.
 * **Safer Pipeline Reset** — Resets wipe derived state (alerts, metrics, leases) but **preserve** the audit log and Kafka topics (topics are flushed, not deleted, preserving event history and consumer offsets).
 
-## Threat Simulation Portal & Role-Based Dashboards
-The Enterprise Login Portal (`http://localhost:8080`) has been enhanced into a full interactive security simulation sandbox:
+## Threat Simulation Portal & Department Portals
+The Enterprise Login Portal (`http://localhost:8080`) is a full interactive security simulation sandbox built to feel like a real enterprise intranet:
 
 * **Dynamic Startup Seeding:** At backend startup, the pipeline dynamically syncs and seeds 200 users (from `user_profiles.json`) into HashiCorp Vault KV storage and the PostgreSQL `hpe_users` database.
-* **Demo Credential Helper:** A dropdown menu on the login page allows selecting any of the 200 users. It queries Vault in real-time to fetch the active password and allows autofilling the login form.
-* **Role-Based Dashboards:** Upon authorization, the interface renders a custom workspace tailored to the user's role:
-  * **Developer:** Displays active repository repositories and commit history.
-  * **Finance:** Displays sensitive financial ledgers and mock document downloads.
-  * **HR:** Displays an employee directory table.
-  * **Sales:** Displays active client portfolios and status.
-  * **Admin:** Displays cluster metrics and system status.
-* **Active Password HUD:** Displays the current session password fetched securely from Vault, with a one-click copy button.
-* **Threat Simulation Panel:** Allows admins/users to simulate anomalies (impossible travel, failed attempts, VPN/Proxy usage, geographical mismatches, and data exfiltration via file downloads).
-* **Automated Credential Rotation Lockout:** When a simulation scores as a `BLOCK` or `CRITICAL_ALERT` threat:
-  1. A background SOAR playbook triggers HashiCorp Vault to rotate the user's password.
-  2. The frontend locks the workspace and displays a **⚡ Automated Credential Rotation Completed** panel showing the newly rotated password.
-  3. The SOAR email notifier sends the rotated cleartext credentials to the Security department admin's inbox.
-  4. The user is logged out automatically and must log in using the newly rotated password.
+* **Demo Credential Helper (curated):** The login-page dropdown lists all active users, but **only 3 curated demo accounts** (`USR-0001` Developer, `USR-0002` Finance, `USR-0005` Admin, marked with ★) reveal their password and allow autofill. All other accounts are masked (`••••••••`) — full credentials are emailed to the admin at Vault initialization. The helper has request timeouts + auto-retry so it never hangs on a slow tunnel.
+* **Department-Themed Portals:** Upon authorization, the workspace renders a department-branded intranet — distinct accent color, time-aware hero greeting, department KPIs, quick-app shortcuts, and an announcements feed — tailored to the user's role:
+  * **Developer (Engineering):** Repository access, build/CI status, PRs, deploys.
+  * **Finance:** Corporate ledgers, sensitive document downloads, invoice/budget KPIs.
+  * **HR:** Employee directory, headcount/onboarding KPIs.
+  * **Sales:** Client CRM, pipeline/quota KPIs.
+  * **Admin (Security):** Infrastructure status and security/rotation controls.
+* **Active Password HUD:** Displays the current session password (synced from Vault) with a one-click copy button.
+* **Session Persistence:** A page reload re-hydrates the session and keeps you in your workspace instead of bouncing back to the login screen.
+
+### Login Memory & Anomaly Simulation
+The portal tracks per-user login memory in PostgreSQL (`last_login_region`, `last_login_ip`, and a rolling `last_failed_attempt`):
+
+* **User-Selected Region:** The Access Region is chosen in the Security Center (not detected by IP). Selecting a region different from the previous login fires an **Impossible Travel** popup, and the backend auto-flags impossible travel when the region changes within a 6-hour window.
+* **Real Failed-Attempt Count:** The panel shows the *actual* recorded wrong-password count (windowed to 5 minutes), not a manual slider.
+* **Other Simulations:** VPN/proxy usage, geographic mismatch, off-hours access, and data exfiltration via large file downloads (with an abnormal-download warning modal).
+* **Clean Baseline on Login:** Each login starts from the user's home region with failed attempts cleared, so stale anomaly state never leaks across sessions.
+
+### Automated Credential Rotation & Lockout
+User credentials rotate automatically and the rotated password is emailed to the credentials admin in these cases:
+
+1. **Threat simulation** scoring `BLOCK` / `CRITICAL_ALERT`.
+2. **Brute-force login:** a successful login that follows **more than 5 failed attempts within 5 minutes** rotates credentials immediately on login.
+3. **Admin approval / VPN / pipeline** rotation triggered server-side from the 5173 console or live pipeline.
+
+In every case a **session watcher** in the portal detects the rotation within seconds, locks the workspace with a **⚡ Credentials Rotated** panel showing the new password, and logs the user out — they must sign back in with the rotated password. Rotation also resets the account's login memory to a clean baseline.
+
+### New User Registration → Admin Approval → Department Access
+* New users register from the portal (department dropdown now includes **Security**) and land in `pending` status — login is blocked until approved.
+* When the admin approves a registration from the 5173 console, the user is **fully provisioned as a department member**: a Vault secret is created with the admin-set password, the **role is inherited from their department**, and a **known home region** is copied from existing department peers (avoiding an "Unknown" geo that would instantly trip anomaly detection). The issued credentials are emailed to the admin.
+
+### Admin Email Notifications
+Email alerts (Gmail SMTP, configured via `SOAR_*` env vars) are sent for the events that matter, instead of flooding on every alert:
+
+* **Vault initialization** — full table of seeded users + initial passwords.
+* **Credential rotation** — the new password for the affected user.
+* **VPN-login detection** — user, source IP, ISP, and geo of a VPN/proxy login.
+* Per-`CRITICAL` threat emails were **removed** (they exhausted the Gmail daily send limit); critical alerts still stream live to the 5173 console via WebSocket.
 
 ## Technologies Used
 * **Frontend:** Vanilla JavaScript, Vite, HTML5, CSS3 (Structural Cyber-Bento styling).
@@ -495,10 +519,12 @@ Navigate to **http://localhost:5173**. The application will automatically use "L
 
 | Method | Endpoint | Auth | Description |
 |--------|----------|------|-------------|
-| POST | `/api/auth/login` | None | Validate user credentials and retrieve user ID and role |
-| POST | `/api/auth/register` | None | Submit a new account registration (pending approval) |
-| POST | `/api/auth/simulate` | None | Run real-time threat simulation with custom geo/VPN/download parameters (forces Vault credential rotation if BLOCK/CRITICAL) |
+| POST | `/api/auth/login` | None | Validate credentials; returns role + login memory. Rotates credentials on brute-force login (>5 failed attempts in 5 min) |
+| POST | `/api/auth/register` | None | Submit a new account registration (pending admin approval) |
+| POST | `/api/auth/simulate` | None | Run real-time threat simulation with custom geo/VPN/download parameters (forces Vault credential rotation if BLOCK/CRITICAL; auto-detects impossible travel) |
 | GET | `/api/auth/users` | None | Retrieve list of active portal users and their roles |
+| GET | `/api/auth/demo-users` | None | List the 3 curated demo accounts whose passwords are shown in the credential helper |
+| GET | `/api/auth/login-history/{user_id}` | None | Login memory: last session time, region, IP, and recorded failed-attempt count |
 | GET | `/api/auth/user-profile/{user_id}` | None | Get user machine learning baseline profile |
 | GET | `/api/auth/user-credential/{user_id}` | None | Retrieve cleartext login password for a user from HashiCorp Vault |
 

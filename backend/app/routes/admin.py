@@ -365,19 +365,68 @@ async def get_registrations(admin=Depends(get_current_admin)):
         return {"error": str(e)}
 
 
+# Representative source IP per known region (so an approved user starts from a
+# recognized location instead of an unknown/flagged one).
+_REGION_IP = {
+    "US-East": "23.20.0.10",
+    "US-West": "52.8.0.10",
+    "EU-Central": "35.156.0.10",
+    "Asia-Pacific": "13.228.0.10",
+    "South-America": "18.231.0.10",
+}
+
+
 @router.post("/registrations/{username}/approve")
 async def approve_registration(username: str, approval: RegistrationApproval, admin=Depends(get_current_admin)):
-    """Approve a pending user registration and set their password."""
+    """
+    Approve a pending registration and fully provision the user as a member of
+    their department: set the password, create their Vault secret, and assign a
+    role + known home region inherited from existing department workers so they
+    can log in with department-appropriate access.
+    """
     from app import db
     admin_username = admin.get('sub', 'unknown')
     pass_hash = hashlib.sha256(approval.password.encode('utf-8')).hexdigest()
     try:
-        db.execute_query(
-            "UPDATE hpe_users SET status = 'active', password_hash = %s WHERE username = %s", 
-            (pass_hash, username)
+        row = db.execute_query(
+            "SELECT department FROM hpe_users WHERE username = %s AND status = 'pending'",
+            (username,), fetch=True
         )
-        logger.info(f"[ADMIN] Registration approved by {admin_username} — credentials issued for user: {username}")
-        return {"success": True, "message": f"User {username} approved and credentials issued."}
+        if not row:
+            return {"success": False, "message": f"No pending registration found for {username}."}
+        department = row.get("department") or "Engineering"
+
+        # Provision Vault secret + in-memory profile from department peers
+        profile = vault_client.provision_approved_user(username, department, approval.password)
+        home_region = profile.get("home_region", "US-East")
+        region_ip = _REGION_IP.get(home_region, "10.0.0.1")
+
+        # Activate in Postgres, seed a known region/IP baseline, clear failures
+        db.execute_query(
+            "UPDATE hpe_users SET status = 'active', password_hash = %s, "
+            "last_login_region = %s, last_login_ip = %s, failed_attempts = 0 "
+            "WHERE username = %s",
+            (pass_hash, home_region, region_ip, username)
+        )
+
+        # Email the issued credentials to the security admin
+        try:
+            from app.soar_email import send_rotation_email
+            send_rotation_email(username, approval.password, "admin_approved_registration")
+        except Exception as mail_err:
+            logger.warning(f"Approval email failed for {username}: {mail_err}")
+
+        logger.info(
+            f"[ADMIN] Registration approved by {admin_username} — {username} provisioned as "
+            f"{profile.get('role')} in {department} (region={home_region})"
+        )
+        return {
+            "success": True,
+            "message": f"User {username} approved as {profile.get('role')} ({department}), home region {home_region}.",
+            "role": profile.get("role"),
+            "department": department,
+            "home_region": home_region,
+        }
     except Exception as e:
         logger.error(f"Failed to approve registration for {username}: {e}")
         return {"success": False, "message": str(e)}

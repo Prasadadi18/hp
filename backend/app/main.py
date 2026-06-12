@@ -47,6 +47,15 @@ async def lifespan(app: FastAPI):
         from app import db
         db.init_pool()
         logger.info("[OK] PostgreSQL pool initialized")
+        # Login-memory migration: DBs created before these columns existed
+        # need them added at startup.
+        try:
+            db.execute_query("ALTER TABLE hpe_users ADD COLUMN IF NOT EXISTS last_login_region VARCHAR(64)")
+            db.execute_query("ALTER TABLE hpe_users ADD COLUMN IF NOT EXISTS last_login_ip VARCHAR(45)")
+            db.execute_query("ALTER TABLE hpe_users ADD COLUMN IF NOT EXISTS last_failed_attempt TIMESTAMPTZ")
+            logger.info("[OK] hpe_users login-memory columns ensured")
+        except Exception as mig_err:
+            logger.warning(f"[WARN] hpe_users migration failed: {mig_err}")
         try:
             users = db.execute_query("SELECT id, username, department, status, password_hash FROM hpe_users", fetch=True, fetch_all=True)
             logger.info(f"[DB INSPECTION] Found {len(users)} users in hpe_users:")

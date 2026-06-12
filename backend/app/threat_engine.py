@@ -294,6 +294,25 @@ def process_raw_event(raw_event: dict) -> PredictionResult:
                 raw_event["user_id"] = user_id
                 raw_event["action"] = "login"
                 raw_event["success"] = (parts[2] == "success")
+
+                # Set login_hour from the event's actual time. Without this it
+                # defaults to 0 (midnight), making EVERY live login look like a
+                # huge off-hours deviation vs the user's base_login_hour (~9) and
+                # falsely scoring normal logins as high-severity anomalies.
+                login_hour = None
+                ts = raw_event.get("ts") or raw_event.get("timestamp") or raw_event.get("@timestamp")
+                if ts is not None:
+                    try:
+                        ts_str = str(ts)
+                        if ts_str.replace(".", "", 1).isdigit():
+                            login_hour = datetime.fromtimestamp(float(ts_str), tz=timezone.utc).hour
+                        else:
+                            login_hour = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).hour
+                    except Exception:
+                        login_hour = None
+                if login_hour is None:
+                    login_hour = datetime.now(timezone.utc).hour
+                raw_event["login_hour"] = login_hour
                 # If the service field had _vpn suffix, mark it
                 if vpn_from_service:
                     raw_event["is_vpn"] = True
@@ -812,18 +831,12 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
     if _pending_updates >= _BATCH_SIZE:
         flush_metrics_to_db()
 
-    # REAL: Fire email alert in background thread — pipeline is never blocked
-    if is_threat and threat_action in (ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT):
-        new_password = user_rotation_result.get("new_login_password") if user_rotation_result else None
-        send_threat_alert_async(
-            event_id=event_id,
-            user=event_dict.get("user_id"),
-            source_ip=event_dict.get("source_ip"),
-            threat_score=ensemble_score,
-            action=threat_action.value,
-            reasons=threat_reasons,
-            new_password=new_password,
-        )
+    # NOTE: We intentionally do NOT email on every BLOCK/CRITICAL alert. The
+    # live pipeline produces a high volume of these, which exhausted the Gmail
+    # daily sending limit and blocked the emails that actually matter. Admin
+    # notifications are now sent only on: (1) credential rotation — handled in
+    # vault_client.rotate_credentials, and (2) VPN-login detection — handled in
+    # routes/auth.py. The alert still appears live on the 5173 console via WS.
 
     return PredictionResult(
         event_id=event_id,

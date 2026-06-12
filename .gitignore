@@ -54,3 +54,7 @@ mlflow.db
 /dataset/updated_realistic_network_logs.csv
 /dataset/updated_realistic_user_profiles.csv
 /dataset/conn.pcap
+
+
+# Claude Code local settings
+.claude/
