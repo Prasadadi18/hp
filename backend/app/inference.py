@@ -330,10 +330,10 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         df['very_high_failed'] = int(df['failed_attempts_last_15m'].iloc[0] >= 8)
         df['success_int'] = int(df['success'].iloc[0])
         
-        # New IP?
+        # Check IP familiarity against user's first-seen baseline
         if hist["first_seen_ip"] is None:
             hist["first_seen_ip"] = df['source_ip'].iloc[0]
-        df['is_new_ip'] = int(df['source_ip'].iloc[0] == hist["first_seen_ip"])
+        df['is_familiar_ip'] = int(df['source_ip'].iloc[0] == hist["first_seen_ip"])
         
         ip_changed = 0
         if hist["prev_ip"] is not None and hist["prev_ip"] != df['source_ip'].iloc[0]:
