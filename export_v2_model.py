@@ -130,9 +130,10 @@ def main():
 
         df = df.sort_values(by=['user_id', 'timestamp']).reset_index(drop=True)
 
-        first_ip = df.groupby(['user_id', 'source_ip'])['timestamp'].min().reset_index(name='first_seen_ip')
-        df = df.merge(first_ip, on=['user_id', 'source_ip'])
-        df['is_new_ip'] = (df['timestamp'] == df['first_seen_ip']).astype(int)
+        # Track each user's very first IP address as their baseline
+        first_ip_per_user = df.groupby('user_id')['source_ip'].first().reset_index(name='baseline_ip')
+        df = df.merge(first_ip_per_user, on='user_id')
+        df['is_familiar_ip'] = (df['source_ip'] == df['baseline_ip']).astype(int)
 
         df['prev_ip'] = df.groupby('user_id')['source_ip'].shift(1)
         df['ip_changed'] = ((df['prev_ip'] != df['source_ip']) & df['prev_ip'].notna()).astype(int)
@@ -173,7 +174,7 @@ def main():
         
         drop_cols = [
             'event_id', 'timestamp', 'user_id', 'workspace_id', 'source_ip',
-            'is_injected_anomaly', 'anomaly_type', 'first_seen_ip', 'prev_ip',
+            'is_injected_anomaly', 'anomaly_type', 'baseline_ip', 'prev_ip',
             'geo_mismatch', 'impossible_travel', 'success', 'remote_worker',
             'action', 'ip_region', 'user_region', 'role',
             'base_login_hour', 'login_hour_std_dev', 'avg_daily_downloads_mb',

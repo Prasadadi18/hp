@@ -330,29 +330,17 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         df['very_high_failed'] = int(df['failed_attempts_last_15m'].iloc[0] >= 8)
         df['success_int'] = int(df['success'].iloc[0])
         
-        # New IP?
+        # Check IP familiarity against user's first-seen baseline
         if hist["first_seen_ip"] is None:
             hist["first_seen_ip"] = df['source_ip'].iloc[0]
-        df['is_new_ip'] = int(df['source_ip'].iloc[0] == hist["first_seen_ip"])
+        df['is_familiar_ip'] = int(df['source_ip'].iloc[0] == hist["first_seen_ip"])
         
         ip_changed = 0
         if hist["prev_ip"] is not None and hist["prev_ip"] != df['source_ip'].iloc[0]:
             ip_changed = 1
         hist["prev_ip"] = df['source_ip'].iloc[0]
         
-        # Very simple decay (assumes events come somewhat chronologically in test stream)
-        hist["ip_hops_30m"] = min(hist["ip_hops_30m"] + ip_changed, 10)
-        df['ip_hops_30m'] = hist["ip_hops_30m"]
-        
-        is_admin_action = int(df['action'].iloc[0] == 'admin')
-        hist["admin_actions_15m"] = min(hist["admin_actions_15m"] + is_admin_action, 20)
-        df['admin_actions_15m'] = hist["admin_actions_15m"]
-        
-        failed_action = 1 - df['success_int'].iloc[0]
-        hist["failed_30m"] = min(hist["failed_30m"] + failed_action, 20)
-        df['failed_30m'] = hist["failed_30m"]
-        
-        # Time since last
+        # Calculate time since last event for TTL-based decay
         if hist["last_event_time"] is None:
             time_since_last = 0.0
         else:
@@ -369,7 +357,28 @@ def engineer_single_event(event: NetworkEvent) -> pd.DataFrame:
         df['time_since_last'] = time_since_last
         df['rapid_succession'] = int(time_since_last < 60)
         
-        hist["events_1h"] = min(hist["events_1h"] + 1, 100)
+        # TTL-based decay for rolling time windows
+        elapsed_minutes = time_since_last / 60.0
+        
+        # Decay ip_hops_30m (30-minute window)
+        decay_factor_30m = max(0, 1 - (elapsed_minutes / 30))
+        hist["ip_hops_30m"] = int(hist["ip_hops_30m"] * decay_factor_30m) + ip_changed
+        df['ip_hops_30m'] = hist["ip_hops_30m"]
+        
+        # Decay admin_actions_15m (15-minute window)
+        decay_factor_15m = max(0, 1 - (elapsed_minutes / 15))
+        is_admin_action = int(df['action'].iloc[0] == 'admin')
+        hist["admin_actions_15m"] = int(hist["admin_actions_15m"] * decay_factor_15m) + is_admin_action
+        df['admin_actions_15m'] = hist["admin_actions_15m"]
+        
+        # Decay failed_30m (30-minute window)
+        failed_action = 1 - df['success_int'].iloc[0]
+        hist["failed_30m"] = int(hist["failed_30m"] * decay_factor_30m) + failed_action
+        df['failed_30m'] = hist["failed_30m"]
+        
+        # Decay events_1h (60-minute window)
+        decay_factor_1h = max(0, 1 - (elapsed_minutes / 60))
+        hist["events_1h"] = int(hist["events_1h"] * decay_factor_1h) + 1
         df['events_1h'] = hist["events_1h"]
         
         save_user_history(user_id, hist)
