@@ -432,20 +432,23 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
 
     threat_action = determine_action(ensemble_score)
 
-    # Force any detected VPN login events to BLOCK severity to trigger the admin approval / grant permission flow
-    if event_dict.get("is_vpn", False):
+    # VPN + geo_mismatch escalation: Only flag VPN connections from unexpected locations
+    # This allows legitimate corporate VPN usage while catching suspicious VPN abuse
+    if event_dict.get("is_vpn", False) and event_dict.get("geo_mismatch", False):
         is_threat = True
-        if threat_action not in (ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT):
+        # Escalate threat level if model didn't already flag it as high-severity
+        if threat_action == ThreatAction.ALLOW:
+            threat_action = ThreatAction.MONITOR
+        elif threat_action == ThreatAction.MONITOR:
             threat_action = ThreatAction.BLOCK
-        if ensemble_score < 0.85:
-            ensemble_score = 0.88
+        # Boost score to ensure it's treated seriously, but don't override strong model signals
+        if ensemble_score < 0.70:
+            ensemble_score = 0.72
 
     # Generate dynamic threat reasons
     threat_reasons = []
     if is_threat:
         threat_reasons = _determine_threat_reasons(event_dict, ensemble_score, threshold)
-        if event_dict.get("is_vpn", False) and not any("VPN" in r for r in threat_reasons):
-            threat_reasons.append("VPN connection detected — suspicious activity requires credential rotation")
 
     stages.append(PipelineStageResult(
         stage_name="AI Detection Engine",
