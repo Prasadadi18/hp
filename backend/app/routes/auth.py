@@ -439,19 +439,28 @@ def simulate(request: SimulateRequest, http_req: Request):
                 except Exception:
                     pass
         
-        # Determine anomaly flag
-        is_anomaly = geo_mismatch or is_vpn or impossible_travel or (selected_downloads > 200) or (selected_failed > 3)
+        # Determine anomaly flag and type
+        # VPN alone from home region is NOT an anomaly (per Fix #3)
+        # Only flag as anomaly when VPN is combined with suspicious behavior
+        is_anomaly = False
         anomaly_type = "None"
-        if is_vpn:
-            anomaly_type = "VPN Login"
-        elif impossible_travel:
+        
+        if impossible_travel:
+            is_anomaly = True
             anomaly_type = "Impossible Travel"
+        elif geo_mismatch and is_vpn:
+            is_anomaly = True
+            anomaly_type = "VPN with Geographic Anomaly"
         elif geo_mismatch:
+            is_anomaly = True
             anomaly_type = "Geographic Anomaly"
         elif selected_downloads > 200:
+            is_anomaly = True
             anomaly_type = "Data Exfiltration"
         elif selected_failed > 3:
+            is_anomaly = True
             anomaly_type = "Credential Stuffing"
+        # VPN alone without geo_mismatch or other anomalies is NOT flagged as anomaly
 
         # 4. Construct NetworkEvent
         event_dict = {
