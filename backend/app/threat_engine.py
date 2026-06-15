@@ -31,6 +31,7 @@ logger = logging.getLogger("hpe.threat_engine")
 
 import json
 from app import db
+from app import redis_client
 
 import threading
 
@@ -112,40 +113,82 @@ def flush_metrics_to_db():
 
 
 def get_metrics() -> Dict[str, Any]:
-    """Get current pipeline metrics (DB total + local unflushed deltas)."""
+    """
+    Get current pipeline metrics.
+
+    Priority:
+      1. Redis atomic counters  — real-time, aggregated across ALL pods.
+         Dashboard reads this path; INCR/INCRBY in process_event keep it
+         current without any batching delay.
+      2. PostgreSQL + local deltas — fallback when Redis is unavailable.
+         Preserves the original single-pod behaviour so the system still
+         works correctly in a non-Redis deployment.
+    """
+    # ── 1. Redis live view (preferred) ───────────────────────────────────────
+    redis_counters = redis_client.get_counters()
+    if redis_counters:
+        total_requests   = redis_counters.get("total_requests", 0)
+        total_threats    = redis_counters.get("total_threats", 0)
+        total_allowed    = redis_counters.get("total_allowed", 0)
+        total_monitored  = redis_counters.get("total_monitored", 0)
+        total_blocked    = redis_counters.get("total_blocked", 0)
+        total_critical   = redis_counters.get("total_critical", 0)
+        total_latency_ms = redis_counters.get("total_latency_ms", 0.0)
+        attack_types     = redis_counters.get("attack_types", {})
+
+        avg_latency = total_latency_ms / max(total_requests, 1)
+        logger.debug(f"[Metrics] Redis hit — {total_requests} total_requests across all pods")
+
+        return {
+            "total_requests":      total_requests,
+            "total_threats":       total_threats,
+            "total_allowed":       total_allowed,
+            "total_monitored":     total_monitored,
+            "total_blocked":       total_blocked,
+            "total_critical":      total_critical,
+            "avg_latency_ms":      round(avg_latency, 2),
+            "attack_types":        attack_types,
+            "source":              "redis",
+            "model_metrics":       inference.get_artifacts().get("metrics", {}) if inference.get_artifacts() else {},
+            "infra_rotation_count": vault_infra_client.get_infra_rotation_count(),
+            "active_infra_leases": len(vault_infra_client.get_active_leases()),
+        }
+
+    # ── 2. PostgreSQL + local deltas fallback ────────────────────────────────
+    logger.debug("[Metrics] Redis unavailable — falling back to DB + local deltas")
     try:
         row = db.execute_query("SELECT * FROM hpe_pipeline_metrics WHERE id = 1", fetch=True)
         if not row:
             return {}
-            
+
         with _metrics_lock:
-            # Combine DB values with unflushed local deltas for real-time accuracy
-            total_requests = row.get("total_requests", 0) + _local_deltas["total_requests"]
-            total_threats = row.get("total_threats", 0) + _local_deltas["total_threats"]
-            total_allowed = row.get("total_allowed", 0) + _local_deltas["total_allowed"]
-            total_monitored = row.get("total_monitored", 0) + _local_deltas["total_monitored"]
-            total_blocked = row.get("total_blocked", 0) + _local_deltas["total_blocked"]
-            total_critical = row.get("total_critical", 0) + _local_deltas["total_critical"]
+            total_requests   = row.get("total_requests",   0)   + _local_deltas["total_requests"]
+            total_threats    = row.get("total_threats",    0)   + _local_deltas["total_threats"]
+            total_allowed    = row.get("total_allowed",    0)   + _local_deltas["total_allowed"]
+            total_monitored  = row.get("total_monitored",  0)   + _local_deltas["total_monitored"]
+            total_blocked    = row.get("total_blocked",    0)   + _local_deltas["total_blocked"]
+            total_critical   = row.get("total_critical",   0)   + _local_deltas["total_critical"]
             total_latency_ms = row.get("total_latency_ms", 0.0) + _local_deltas["total_latency_ms"]
-            
+
             attack_types = row.get("attack_types", {})
             if isinstance(attack_types, str):
                 attack_types = json.loads(attack_types)
             for atk, count in _local_deltas["attack_types"].items():
                 attack_types[atk] = attack_types.get(atk, 0) + count
 
-        avg_latency = (total_latency_ms / max(total_requests, 1))
+        avg_latency = total_latency_ms / max(total_requests, 1)
 
         return {
-            "total_requests": total_requests,
-            "total_threats": total_threats,
-            "total_allowed": total_allowed,
-            "total_monitored": total_monitored,
-            "total_blocked": total_blocked,
-            "total_critical": total_critical,
-            "avg_latency_ms": round(avg_latency, 2),
-            "attack_types": attack_types,
-            "model_metrics": inference.get_artifacts().get("metrics", {}) if inference.get_artifacts() else {},
+            "total_requests":      total_requests,
+            "total_threats":       total_threats,
+            "total_allowed":       total_allowed,
+            "total_monitored":     total_monitored,
+            "total_blocked":       total_blocked,
+            "total_critical":      total_critical,
+            "avg_latency_ms":      round(avg_latency, 2),
+            "attack_types":        attack_types,
+            "source":              "db_fallback",
+            "model_metrics":       inference.get_artifacts().get("metrics", {}) if inference.get_artifacts() else {},
             "infra_rotation_count": vault_infra_client.get_infra_rotation_count(),
             "active_infra_leases": len(vault_infra_client.get_active_leases()),
         }
@@ -750,23 +793,41 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
     # ── Compute totals ────────────────────────────────────────────────────────
     total_latency = (time.time() - t0) * 1000
 
+    _action_key_map = {
+        ThreatAction.ALLOW:          "total_allowed",
+        ThreatAction.MONITOR:        "total_monitored",
+        ThreatAction.BLOCK:          "total_blocked",
+        ThreatAction.CRITICAL_ALERT: "total_critical",
+    }
+    action_key = _action_key_map.get(threat_action)
+    attack_type_str = event_dict.get("anomaly_type", "unknown") if is_threat else None
+
+    # ── Redis atomic counters (cross-pod real-time view) ──────────────────────
+    # INCR/INCRBYFLOAT are atomic — no lock needed, no batching lag.
+    # All pods share the same Redis keys so /api/metrics returns the true
+    # aggregate instead of 1/N of the actual traffic.
+    redis_client.incr("total_requests")
+    redis_client.incr_float("total_latency_ms", total_latency)
+    if is_threat:
+        redis_client.incr("total_threats")
+    if action_key:
+        redis_client.incr(action_key)
+    if attack_type_str:
+        redis_client.incr_attack_type(attack_type_str)
+
+    # ── Local deltas (DB flush buffer — PostgreSQL persistence) ───────────────
+    # _local_deltas still accumulates per-pod increments and is flushed to
+    # PostgreSQL every _BATCH_SIZE events.  PostgreSQL is the persistent
+    # store; Redis is only the live view.
     with _metrics_lock:
         _local_deltas["total_requests"] += 1
         _local_deltas["total_latency_ms"] += total_latency
         if is_threat:
             _local_deltas["total_threats"] += 1
-        _action_key_map = {
-            ThreatAction.ALLOW:          "total_allowed",
-            ThreatAction.MONITOR:        "total_monitored",
-            ThreatAction.BLOCK:          "total_blocked",
-            ThreatAction.CRITICAL_ALERT: "total_critical",
-        }
-        action_key = _action_key_map.get(threat_action)
         if action_key:
             _local_deltas[action_key] += 1
-        if is_threat:
-            at = event_dict.get("anomaly_type", "unknown")
-            _local_deltas["attack_types"][at] = _local_deltas["attack_types"].get(at, 0) + 1
+        if attack_type_str:
+            _local_deltas["attack_types"][attack_type_str] = _local_deltas["attack_types"].get(attack_type_str, 0) + 1
 
     # ── Geo mapping ───────────────────────────────────────────────────────────
     region_geo = {
