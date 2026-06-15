@@ -109,6 +109,7 @@ class HealthResponse(BaseModel):
     kafka_connected: bool = False
     elasticsearch_connected: bool = False
     vault_connected: bool = False
+    redis_connected: bool = False
     total_requests: int = 0
     total_threats_blocked: int = 0
 
@@ -124,6 +125,11 @@ class MetricsResponse(BaseModel):
     model_metrics: Dict[str, float] = {}
     pipeline_health: Dict[str, str] = {}
     attack_types: Dict[str, int] = {}
+    # Indicates which data path served the response:
+    #   "redis"       — real-time cross-pod aggregate from Redis atomic counters
+    #   "db_fallback" — single-pod DB + local-delta view (Redis unavailable)
+    source: str = "db_fallback"
+    redis_connected: bool = False
 
 
 class PipelineStatusResponse(BaseModel):

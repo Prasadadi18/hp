@@ -6,7 +6,7 @@ import time
 from fastapi import APIRouter
 from app.schemas import HealthResponse, MetricsResponse
 from app.config import APP_NAME, APP_VERSION
-from app import kafka_client, elastic_client, vault_client, inference
+from app import kafka_client, elastic_client, vault_client, inference, redis_client
 from app.threat_engine import get_metrics
 
 router = APIRouter(prefix="/api", tags=["health"])
@@ -27,6 +27,7 @@ async def health_check():
         kafka_connected=kafka_client.is_connected(),
         elasticsearch_connected=elastic_client.is_connected(),
         vault_connected=vault_client.is_connected(),
+        redis_connected=redis_client.is_available(),
         total_requests=metrics["total_requests"],
         total_threats_blocked=metrics["total_blocked"] + metrics["total_critical"],
     )
@@ -36,6 +37,7 @@ async def health_check():
 async def get_pipeline_metrics():
     """Get detailed pipeline metrics."""
     metrics = get_metrics()
+    redis_up = redis_client.is_available()
     return MetricsResponse(
         total_requests=metrics["total_requests"],
         total_threats=metrics["total_threats"],
@@ -46,12 +48,15 @@ async def get_pipeline_metrics():
         avg_latency_ms=metrics["avg_latency_ms"],
         model_metrics=metrics.get("model_metrics", {}),
         pipeline_health={
-            "kafka": "connected" if kafka_client.is_connected() else "disconnected",
-            "elasticsearch": "connected" if elastic_client.is_connected() else "disconnected",
-            "vault": "connected" if vault_client.is_connected() else "disconnected",
-            "model": "loaded" if inference.get_artifacts() else "not_loaded",
+            "kafka":         "connected"    if kafka_client.is_connected()    else "disconnected",
+            "elasticsearch": "connected"    if elastic_client.is_connected()  else "disconnected",
+            "vault":         "connected"    if vault_client.is_connected()    else "disconnected",
+            "model":         "loaded"       if inference.get_artifacts()      else "not_loaded",
+            "redis":         "connected"    if redis_up                       else "disconnected",
         },
         attack_types=metrics.get("attack_types", {}),
+        source=metrics.get("source", "db_fallback"),
+        redis_connected=redis_up,
     )
 
 
