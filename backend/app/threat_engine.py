@@ -256,9 +256,13 @@ def _determine_threat_reasons(event_dict: dict, score: float, threshold: float) 
         else:
             reasons.append("Geographic Mismatch (source IP region differs from typical user profile)")
             
-    # Check for general VPN connection warning if no other geo anomalies are present
+    # Only flag VPN as a threat reason if the model actually detected it as threatening
+    # VPN alone from home region should NOT generate a threat reason (per Fix #3)
     if event_dict.get("is_vpn") and not event_dict.get("geo_mismatch") and not event_dict.get("impossible_travel"):
-        reasons.append("Connection originating from public/commercial VPN node")
+        # Only add VPN warning if the score indicates an actual threat
+        # This prevents false alarms for legitimate corporate VPN usage
+        if score > threshold:
+            reasons.append("Connection originating from public/commercial VPN node")
         
     # 3. Check for high failed attempts
     failed_attempts = event_dict.get("failed_attempts_last_15m", 0)
@@ -361,16 +365,19 @@ def process_raw_event(raw_event: dict) -> PredictionResult:
                     raw_event["is_vpn"] = True
                 # Simulate anomaly features for AI engine if login failed
                 if not raw_event["success"]:
-                    raw_event["anomaly_type"] = "brute_force"
                     raw_event["failed_attempts_last_15m"] = 5
                 else:
-                    raw_event["anomaly_type"] = "None"
                     raw_event["failed_attempts_last_15m"] = 0
+                # Don't hardcode anomaly_type here - let threat_engine classify based on actual event data
                 
                 # Dynamic GeoIP region lookup and profile alignment
-                from app.inference import _user_profiles
-                profile = _user_profiles.get(user_id, {})
+                # Import from vault_client to get the most up-to-date profiles (includes newly approved users)
+                from app import vault_client
+                profile = next((p for p in vault_client._user_profiles if p.get("user_id") == user_id), {})
                 home_region = profile.get("home_region", "US-East")
+                
+                logger.info(f"[Kafka Consumer] Processing auth event for {user_id}: profile_home_region={home_region}, profile_found={bool(profile)}")
+                
                 raw_event["user_region"] = home_region
                 raw_event["home_region"] = home_region
                 
@@ -387,6 +394,8 @@ def process_raw_event(raw_event: dict) -> PredictionResult:
                 
                 raw_event["ip_region"] = ip_region
                 raw_event["geo_mismatch"] = (ip_region != home_region)
+                
+                logger.info(f"[Kafka Consumer] {user_id}: ip_region={ip_region}, home_region={home_region}, geo_mismatch={raw_event['geo_mismatch']}, src_ip={src_ip}")
                 
                 # Map role if present in profile
                 raw_event["role"] = profile.get("role", "Developer")
@@ -475,9 +484,77 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
 
     threat_action = determine_action(ensemble_score)
 
-    # VPN + geo_mismatch escalation: Only flag VPN connections from unexpected locations
-    # This allows legitimate corporate VPN usage while catching suspicious VPN abuse
-    if event_dict.get("is_vpn", False) and event_dict.get("geo_mismatch", False):
+    # Classify anomaly type based on event characteristics
+    # This classification happens here (not in raw event processing) so it applies to both
+    # simulation portal events and Kafka/Zeek events uniformly
+    anomaly_type = event_dict.get("anomaly_type", "None")
+    geo_mismatch = event_dict.get("geo_mismatch", False)
+    impossible_travel = event_dict.get("impossible_travel", False)
+    failed_attempts = event_dict.get("failed_attempts_last_15m", 0)
+    download_mb = event_dict.get("data_downloaded_mb", 0.0)
+    is_vpn = event_dict.get("is_vpn", False)
+    
+    logger.info(f"[Anomaly Classification] BEFORE: anomaly_type={anomaly_type}, geo_mismatch={geo_mismatch}, impossible_travel={impossible_travel}, download_mb={download_mb}, failed_attempts={failed_attempts}, is_vpn={is_vpn}")
+    
+    # If anomaly_type wasn't already set (e.g., from simulation portal), classify it now
+    if anomaly_type == "None" or not anomaly_type:
+        if impossible_travel:
+            anomaly_type = "Impossible Travel"
+        elif geo_mismatch and is_vpn:
+            anomaly_type = "VPN with Geographic Anomaly"
+        elif geo_mismatch:
+            anomaly_type = "Geographic Anomaly"
+        elif download_mb > 200:
+            anomaly_type = "Data Exfiltration"
+        elif failed_attempts > 3:
+            anomaly_type = "Credential Stuffing"
+        # If still None at this point, it's a clean event or VPN-only (no other anomalies)
+    
+    logger.info(f"[Anomaly Classification] AFTER: anomaly_type={anomaly_type}")
+    
+    # Check if there are ANY real anomalies
+    has_real_anomalies = (
+        geo_mismatch or 
+        impossible_travel or 
+        failed_attempts >= 5 or 
+        download_mb > 200
+    )
+    
+    logger.info(f"[Anomaly Classification] has_real_anomalies={has_real_anomalies}, ensemble_score={ensemble_score:.4f}, threshold={threshold:.4f}")
+    
+    # HARDCODED FIX: If anomaly_type is "None" AND no other real anomalies exist, force ALLOW
+    # This handles VPN-only cases where model incorrectly scores high but no real anomaly exists
+    if anomaly_type == "None" and not has_real_anomalies and ensemble_score > threshold:
+        logger.info(f"[Hardcoded Fix] Anomaly type is None and no real anomalies detected, but score is high ({ensemble_score:.4f}). Forcing ALLOW.")
+        ensemble_score = threshold * 0.5  # Force well below threshold
+        is_threat = False
+        threat_action = ThreatAction.ALLOW
+    
+    # VPN score adjustment: The model was trained on data where VPN was always suspicious,
+    # so it learned to heavily weight is_vpn=1. We need to correct this for legitimate VPN usage.
+    
+    # Debug logging to diagnose VPN de-escalation
+    if is_vpn:
+        logger.info(f"[VPN Debug] is_vpn={is_vpn}, geo_mismatch={geo_mismatch}, impossible_travel={impossible_travel}, ensemble_score={ensemble_score:.4f}, threshold={threshold:.4f}, is_threat={is_threat}")
+    
+    # Case 1: VPN WITHOUT geo_mismatch = DE-ESCALATE (legitimate corporate VPN)
+    # Check this FIRST before geo_mismatch escalation
+    if is_vpn and not geo_mismatch and not impossible_travel:
+        # Model incorrectly learned VPN=bad, so it scores VPN-only events too high
+        # Suppress the false positive by capping the score at ALLOW threshold
+        # UNLESS there are other actual anomalies (failed logins, data exfiltration, etc.)
+        
+        logger.info(f"[VPN De-escalation Check] failed_attempts={failed_attempts}, download_mb={download_mb}, has_real_anomalies={has_real_anomalies}, ensemble_score > threshold: {ensemble_score > threshold}")
+        
+        if not has_real_anomalies and ensemble_score > threshold:
+            # VPN alone shouldn't trigger threat - cap the score below threshold
+            logger.info(f"[VPN De-escalation] Capping score from {ensemble_score:.4f} to {threshold * 0.8:.4f} for VPN-only event (no geo_mismatch)")
+            ensemble_score = threshold * 0.8  # Keep it below threshold
+            is_threat = False
+            threat_action = ThreatAction.ALLOW
+    
+    # Case 2: VPN + geo_mismatch = ESCALATE (suspicious VPN from unexpected location)
+    elif is_vpn and geo_mismatch:
         is_threat = True
         # Escalate threat level if model didn't already flag it as high-severity
         if threat_action == ThreatAction.ALLOW:
@@ -852,7 +929,19 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
     stages_dicts = [s.model_dump() for s in stages]
     alert_id = None
 
+    # Skip alert creation for live_portal auth events only
+    # Live portal auth: These are user logins through the Enterprise Login Portal - they get 
+    # real-time feedback in the portal UI, so we don't create duplicate admin alerts.
+    # Simulation portal: DOES create alerts - these are security tests that admins should review.
+    event_source = event_dict.get("event_source", "")
+    user_id = event_dict.get("user_id", "")
+    is_live_auth = (event_source == "live_portal")
+    
+    # Debug logging
     if is_high_severity:
+        logger.info(f"[Alert Check] user={user_id}, event_source='{event_source}', is_live_auth={is_live_auth}, will_create_alert={not is_live_auth}")
+
+    if is_high_severity and not is_live_auth:
         admin_alert = admin_store.create_alert(
             event_id=event_id,
             user_id=event_dict.get("user_id", "unknown"),
