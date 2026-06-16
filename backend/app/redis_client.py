@@ -30,6 +30,25 @@ METRIC_KEYS = [
 ]
 ATTACK_TYPES_KEY = f"{_NS}:attack_types"  # stored as a Redis Hash
 
+# ── Admin alert counter namespace ─────────────────────────────────────────────
+# Mirrors hpe_admin_stats so get_stats() can read from Redis (microseconds)
+# instead of firing 3 COUNT(*) queries per WebSocket ping.
+_ADMIN_NS = "hpe:stats"
+
+ADMIN_STAT_KEYS = [
+    "total_alerts",
+    "pending_count",
+    "critical_pending",
+    "total_approved",
+    "total_rejected",
+    "total_auto_allowed",
+    "total_alerts_created",
+]
+
+
+def _admin_key(field: str) -> str:
+    return f"{_ADMIN_NS}:{field}"
+
 
 def _rkey(field: str) -> str:
     return f"{_NS}:{field}"
@@ -147,3 +166,91 @@ def get_counters() -> dict:
 def is_available() -> bool:
     """Return True when Redis is reachable."""
     return get_client() is not None
+
+
+# ── Admin alert counter helpers ───────────────────────────────────────────────
+
+def admin_incr(field: str, amount: int = 1) -> bool:
+    """
+    Atomically increment an admin alert stat counter.
+    Keys live under hpe:stats:<field> and mirror hpe_admin_stats columns.
+    Returns True on success, False when Redis is unavailable (caller falls
+    back to PostgreSQL-only path — no data loss).
+    """
+    r = get_client()
+    if r is None:
+        return False
+    try:
+        r.incrby(_admin_key(field), amount)
+        return True
+    except Exception as exc:
+        logger.debug(f"[Redis] admin INCRBY {field} failed: {exc}")
+        return False
+
+
+def admin_decr(field: str, amount: int = 1) -> bool:
+    """
+    Atomically decrement an admin alert stat counter (floor at 0).
+    Used to reduce pending_count / critical_pending when an alert is resolved.
+    """
+    r = get_client()
+    if r is None:
+        return False
+    try:
+        # DECRBY then clamp to 0 to guard against counter drift
+        new_val = r.decrby(_admin_key(field), amount)
+        if new_val < 0:
+            r.set(_admin_key(field), 0)
+        return True
+    except Exception as exc:
+        logger.debug(f"[Redis] admin DECRBY {field} failed: {exc}")
+        return False
+
+
+def get_admin_stats() -> dict:
+    """
+    Read all admin alert counters in a single pipeline round-trip.
+    Returns a populated dict when Redis is available, empty dict otherwise
+    (caller must fall back to PostgreSQL COUNT queries).
+    """
+    r = get_client()
+    if r is None:
+        return {}
+    try:
+        pipe = r.pipeline(transaction=False)
+        for field in ADMIN_STAT_KEYS:
+            pipe.get(_admin_key(field))
+        results = pipe.execute()
+
+        counters = {}
+        for i, field in enumerate(ADMIN_STAT_KEYS):
+            raw = results[i]
+            counters[field] = int(raw) if raw is not None else None  # None = key missing
+        return counters
+    except Exception as exc:
+        logger.debug(f"[Redis] get_admin_stats failed: {exc}")
+        return {}
+
+
+def init_admin_stats_from_db(db_stats: dict) -> bool:
+    """
+    Seed Redis admin counters from the current PostgreSQL values.
+    Called once at startup (main.py) so counters are accurate after a
+    pod restart without waiting for events to rebuild them.
+    Uses SET NX (only if not exists) to avoid resetting live counters
+    when a second pod starts.
+    """
+    r = get_client()
+    if r is None:
+        return False
+    try:
+        pipe = r.pipeline(transaction=True)
+        for field in ADMIN_STAT_KEYS:
+            if field in db_stats and db_stats[field] is not None:
+                pipe.setnx(_admin_key(field), int(db_stats[field]))
+        pipe.execute()
+        logger.info("[Redis] Admin stats seeded from PostgreSQL (SET NX)")
+        return True
+    except Exception as exc:
+        logger.warning(f"[Redis] init_admin_stats_from_db failed: {exc}")
+        return False
