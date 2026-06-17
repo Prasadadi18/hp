@@ -1,5 +1,11 @@
 """
 admin_store.py — PostgreSQL-backed store for admin alerts and audit trail.
+
+Alert counters are mirrored in Redis (hpe:stats:*) for O(1) WebSocket reads.
+Every mutation (create / approve / reject / auto-allow) increments/decrements
+the relevant Redis counter atomically, then updates PostgreSQL as the source
+of truth. get_stats() reads from Redis in a single pipeline call (microseconds)
+and falls back to PostgreSQL COUNT(*) queries when Redis is unavailable.
 """
 
 import logging
@@ -8,6 +14,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from app import db
+from app import redis_client
 
 logger = logging.getLogger("hpe.admin_store")
 
@@ -62,6 +69,12 @@ def create_alert(
     try:
         db.execute_query(query, params)
         db.execute_query("UPDATE hpe_admin_stats SET total_alerts_created = total_alerts_created + 1 WHERE id = 1")
+        # ── Redis atomic counters (best-effort, non-blocking) ──────────────
+        redis_client.admin_incr("total_alerts")
+        redis_client.admin_incr("total_alerts_created")
+        redis_client.admin_incr("pending_count")
+        if threat_action == "CRITICAL_ALERT":
+            redis_client.admin_incr("critical_pending")
     except Exception as e:
         logger.error(f"Failed to create alert in DB: {e}")
 
@@ -170,6 +183,11 @@ def approve_alert(alert_id: str, admin_notes: str = "") -> Optional[Dict[str, An
         db.execute_query(audit_query, (alert_id, alert["user_id"], alert["threat_score"], admin_notes))
         
         db.execute_query("UPDATE hpe_admin_stats SET total_approved = total_approved + 1 WHERE id = 1")
+        # ── Redis atomic counters ──────────────────────────────────────────
+        redis_client.admin_decr("pending_count")
+        redis_client.admin_incr("total_approved")
+        if alert.get("threat_action") == "CRITICAL_ALERT":
+            redis_client.admin_decr("critical_pending")
     except Exception as e:
         logger.error(f"Failed to approve alert {alert_id}: {e}")
         return None
@@ -201,6 +219,11 @@ def reject_alert(alert_id: str, admin_notes: str = "") -> Optional[Dict[str, Any
         db.execute_query(audit_query, (alert_id, alert["user_id"], alert["threat_score"], admin_notes))
         
         db.execute_query("UPDATE hpe_admin_stats SET total_rejected = total_rejected + 1 WHERE id = 1")
+        # ── Redis atomic counters ──────────────────────────────────────────
+        redis_client.admin_decr("pending_count")
+        redis_client.admin_incr("total_rejected")
+        if alert.get("threat_action") == "CRITICAL_ALERT":
+            redis_client.admin_decr("critical_pending")
     except Exception as e:
         logger.error(f"Failed to reject alert {alert_id}: {e}")
         return None
@@ -222,12 +245,43 @@ def increment_auto_allowed():
     """Track events that were auto-allowed (low threat score)."""
     try:
         db.execute_query("UPDATE hpe_admin_stats SET total_auto_allowed = total_auto_allowed + 1 WHERE id = 1")
+        # ── Redis atomic counter ───────────────────────────────────────────
+        redis_client.admin_incr("total_auto_allowed")
     except Exception as e:
         logger.error(f"Failed to increment auto allowed: {e}")
 
 
 def get_stats() -> Dict[str, Any]:
-    """Get admin dashboard summary stats."""
+    """
+    Get admin dashboard summary stats.
+
+    Fast path (Redis): single pipeline GET across all hpe:stats:* keys —
+    returns in microseconds regardless of N admin clients or pod count.
+
+    Slow path (PostgreSQL fallback): used when Redis is unavailable or the
+    keys have not been seeded yet (e.g. first startup before any events).
+    """
+    # ── 1. Try Redis first ────────────────────────────────────────────────
+    try:
+        redis_stats = redis_client.get_admin_stats()
+        # All keys must be present and non-None for the Redis read to be valid.
+        # A None value means the key has never been written (cold start), so
+        # we fall through to PostgreSQL to seed the counters accurately.
+        if redis_stats and all(v is not None for v in redis_stats.values()):
+            return {
+                "total_alerts_created": redis_stats.get("total_alerts_created", 0),
+                "total_approved":       redis_stats.get("total_approved", 0),
+                "total_rejected":       redis_stats.get("total_rejected", 0),
+                "total_auto_allowed":   redis_stats.get("total_auto_allowed", 0),
+                "pending_count":        redis_stats.get("pending_count", 0),
+                "critical_pending":     redis_stats.get("critical_pending", 0),
+                "total_alerts":         redis_stats.get("total_alerts", 0),
+                "_source": "redis",
+            }
+    except Exception as e:
+        logger.debug(f"[Stats] Redis read failed, falling back to PG: {e}")
+
+    # ── 2. PostgreSQL fallback ────────────────────────────────────────────
     try:
         stats_row = db.execute_query("SELECT * FROM hpe_admin_stats WHERE id = 1", fetch=True)
         if not stats_row:
@@ -246,16 +300,22 @@ def get_stats() -> Dict[str, Any]:
         
         total_row = db.execute_query("SELECT COUNT(*) as count FROM hpe_admin_alerts", fetch=True)
         total_alerts = total_row['count'] if total_row else 0
-        
-        return {
+
+        result = {
             "total_alerts_created": stats_row.get("total_alerts_created", 0),
-            "total_approved": stats_row.get("total_approved", 0),
-            "total_rejected": stats_row.get("total_rejected", 0),
-            "total_auto_allowed": stats_row.get("total_auto_allowed", 0),
-            "pending_count": pending_count,
-            "critical_pending": critical_pending,
-            "total_alerts": total_alerts,
+            "total_approved":       stats_row.get("total_approved", 0),
+            "total_rejected":       stats_row.get("total_rejected", 0),
+            "total_auto_allowed":   stats_row.get("total_auto_allowed", 0),
+            "pending_count":        pending_count,
+            "critical_pending":     critical_pending,
+            "total_alerts":         total_alerts,
+            "_source": "postgres",
         }
+
+        # Opportunistically seed Redis so next call is fast
+        redis_client.init_admin_stats_from_db(result)
+        return result
+
     except Exception as e:
         logger.error(f"Failed to get admin stats: {e}")
         return {
@@ -266,6 +326,7 @@ def get_stats() -> Dict[str, Any]:
             "pending_count": 0,
             "critical_pending": 0,
             "total_alerts": 0,
+            "_source": "error",
         }
 
 

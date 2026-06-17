@@ -1,4 +1,5 @@
 import hashlib
+import json
 import time
 import os
 import uuid
@@ -18,6 +19,114 @@ from app.threat_engine import process_event
 logger = logging.getLogger("hpe.auth")
 router = APIRouter()
 
+# ── Shared Redis Client (lazy-init, graceful fallback) ────────────────────────
+# Used for cross-pod caching of user profile rows and VPN lookup results.
+# If Redis is unavailable the code degrades transparently to direct DB / HTTP.
+try:
+    import redis as _redis_lib
+except ImportError:
+    _redis_lib = None  # type: ignore
+
+_redis_client = None
+_redis_initialized = False
+_redis_lock = threading.Lock()
+
+
+def _get_redis():
+    """Return a shared Redis client, or None when Redis is unavailable."""
+    global _redis_client, _redis_initialized
+    if _redis_initialized:
+        return _redis_client
+    with _redis_lock:
+        if _redis_initialized:
+            return _redis_client
+        if _redis_lib is None:
+            logger.warning("[Auth] redis-py not installed — caching disabled")
+            _redis_initialized = True
+            return None
+        try:
+            redis_url = os.getenv("REDIS_URL", "redis://redis:6379")
+            client = _redis_lib.from_url(redis_url, decode_responses=True, socket_connect_timeout=2)
+            client.ping()
+            _redis_client = client
+            logger.info(f"[Auth] Redis connected at {redis_url}")
+        except Exception as e:
+            logger.warning(f"[Auth] Redis unavailable ({e}) — caching disabled")
+            _redis_client = None
+        _redis_initialized = True
+    return _redis_client
+
+
+# ── User-Profile Cache (Redis) ────────────────────────────────────────────────
+# Key:  user:{username}
+# Value: JSON-encoded row from hpe_users (username, department, status,
+#        password_hash, failed_attempts, last_login, last_login_region,
+#        last_login_ip, last_failed_attempt)
+# TTL:  300 s  (5 minutes)
+_USER_CACHE_TTL = 300
+
+
+def _cache_key_user(username: str) -> str:
+    return f"user:{username}"
+
+
+def get_cached_user(username: str) -> Optional[dict]:
+    """Return cached hpe_users row, or None on miss / Redis down."""
+    r = _get_redis()
+    if r is None:
+        return None
+    try:
+        raw = r.get(_cache_key_user(username))
+        if raw:
+            return json.loads(raw)
+    except Exception as e:
+        logger.debug(f"[Auth] Redis GET user:{username} failed: {e}")
+    return None
+
+
+def cache_user(username: str, user_row: dict) -> None:
+    """Store hpe_users row in Redis. Serialises datetime fields to ISO strings."""
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        # Make row JSON-serialisable (datetimes → ISO strings)
+        serialisable = {}
+        for k, v in user_row.items():
+            if isinstance(v, datetime):
+                serialisable[k] = v.isoformat()
+            else:
+                serialisable[k] = v
+        r.setex(_cache_key_user(username), _USER_CACHE_TTL, json.dumps(serialisable))
+        logger.debug(f"[Auth] Cached user:{username} (TTL={_USER_CACHE_TTL}s)")
+    except Exception as e:
+        logger.debug(f"[Auth] Redis SET user:{username} failed: {e}")
+
+
+def invalidate_user_cache(username: str) -> None:
+    """Delete the cached user row so the next request re-reads from PostgreSQL."""
+    r = _get_redis()
+    if r is None:
+        return
+    try:
+        r.delete(_cache_key_user(username))
+        logger.debug(f"[Auth] Invalidated cache for user:{username}")
+    except Exception as e:
+        logger.debug(f"[Auth] Redis DEL user:{username} failed: {e}")
+
+
+def _restore_user_datetimes(user: dict) -> dict:
+    """Convert ISO-string datetime fields back to datetime objects after cache hit."""
+    dt_fields = ("last_login", "last_failed_attempt")
+    for field in dt_fields:
+        val = user.get(field)
+        if isinstance(val, str):
+            try:
+                user[field] = datetime.fromisoformat(val)
+            except Exception:
+                user[field] = None
+    return user
+
 class LoginRequest(BaseModel):
     username: str
     password: str
@@ -33,34 +142,65 @@ IMPOSSIBLE_TRAVEL_WINDOW_SECONDS = 6 * 3600
 
 # ── VPN / Proxy IP Detection ─────────────────────────────────────────────────
 # Uses ip-api.com (free, 45 req/min) to detect VPN, proxy, and hosting IPs.
-# Results are cached in-memory to avoid hitting the rate limit.
+#
+# Two-level cache:
+#   L1 – per-process dict (_vpn_cache)  → ~0 ms, no network
+#   L2 – shared Redis key vpn:{ip}      → shared across all replicas
+# Results stored in both layers on a cold fetch from ip-api.com.
 _vpn_cache: dict = {}
 _vpn_cache_lock = threading.Lock()
 _VPN_CACHE_TTL = 600  # 10 minutes
+_VPN_REDIS_KEY_PREFIX = "vpn:"
+
+
+def _cache_key_vpn(ip: str) -> str:
+    return f"{_VPN_REDIS_KEY_PREFIX}{ip}"
+
 
 def check_vpn_ip(ip: str) -> dict:
     """
     Check if an IP address belongs to a VPN, proxy, or hosting provider.
     Returns dict with: is_vpn, isp, country, city, region.
     Uses ip-api.com free tier (45 req/min, no key needed).
+
+    Cache hierarchy:
+      1. In-process dict (L1) — checked first, no I/O
+      2. Shared Redis key vpn:{ip} (L2) — shared across replicas, TTL=600s
+      3. Live ip-api.com HTTP call — result written to both cache layers
     """
-    # Skip private/docker IPs
+    # Skip private/docker IPs — always return immediately, nothing to cache.
     if ip.startswith(("10.", "172.", "192.168.", "127.", "0.")):
         return {"is_vpn": False, "isp": "Private Network", "country": "Local", "city": "Local", "region": "Local"}
 
-    # Check cache first
+    # ── L1: in-process cache ──────────────────────────────────────────────────
     with _vpn_cache_lock:
         cached = _vpn_cache.get(ip)
-        if cached and (time.time() - cached["_ts"]) < _VPN_CACHE_TTL:
+        if cached and (time.time() - cached.get("_ts", 0)) < _VPN_CACHE_TTL:
+            logger.debug(f"[Auth] VPN L1 hit for {ip}")
             return cached
 
+    # ── L2: shared Redis cache ────────────────────────────────────────────────
+    r = _get_redis()
+    if r is not None:
+        try:
+            raw = r.get(_cache_key_vpn(ip))
+            if raw:
+                result = json.loads(raw)
+                result["_ts"] = time.time()  # refresh local timestamp
+                with _vpn_cache_lock:
+                    _vpn_cache[ip] = result
+                logger.debug(f"[Auth] VPN L2 (Redis) hit for {ip}")
+                return result
+        except Exception as e:
+            logger.debug(f"[Auth] Redis GET vpn:{ip} failed: {e}")
+
+    # ── L3: live HTTP lookup ──────────────────────────────────────────────────
     try:
         import urllib.request
-        import json as json_mod
         url = f"http://ip-api.com/json/{ip}?fields=status,proxy,hosting,isp,country,city,regionName"
         req = urllib.request.Request(url, headers={"User-Agent": "HPE-ThreatPipeline/1.0"})
         with urllib.request.urlopen(req, timeout=3) as resp:
-            data = json_mod.loads(resp.read().decode())
+            data = json.loads(resp.read().decode())
 
         if data.get("status") != "success":
             logger.warning(f"ip-api.com lookup failed for {ip}: {data}")
@@ -75,14 +215,23 @@ def check_vpn_ip(ip: str) -> dict:
             "_ts": time.time(),
         }
 
-        # Cache the result
+        # Write to L1 (in-process dict)
         with _vpn_cache_lock:
             _vpn_cache[ip] = result
-            # Prune cache if it grows too large
+            # Prune L1 cache if it grows too large
             if len(_vpn_cache) > 500:
-                oldest = sorted(_vpn_cache.items(), key=lambda x: x[1]["_ts"])[:100]
+                oldest = sorted(_vpn_cache.items(), key=lambda x: x[1].get("_ts", 0))[:100]
                 for k, _ in oldest:
                     del _vpn_cache[k]
+
+        # Write to L2 (Redis) — strip internal _ts field so it doesn't age in Redis
+        if r is not None:
+            try:
+                redis_payload = {k: v for k, v in result.items() if k != "_ts"}
+                r.setex(_cache_key_vpn(ip), _VPN_CACHE_TTL, json.dumps(redis_payload))
+                logger.debug(f"[Auth] VPN cached in Redis for {ip} (TTL={_VPN_CACHE_TTL}s)")
+            except Exception as e:
+                logger.debug(f"[Auth] Redis SET vpn:{ip} failed: {e}")
 
         logger.info(f"VPN check for {ip}: is_vpn={result['is_vpn']}, isp={result['isp']}, country={result['country']}")
         return result
@@ -183,9 +332,18 @@ def login(request: LoginRequest, http_req: Request):
         logger.warning(f"🛡️ VPN DETECTED: User '{request.username}' logging in from VPN IP {client_ip} ({vpn_info.get('isp')}, {vpn_info.get('country')})")
     
     try:
-        query = "SELECT * FROM hpe_users WHERE username = %s"
-        user = db.execute_query(query, (request.username,), fetch=True)
-        
+        # ── Redis L1: try cached user profile first (skip PostgreSQL on HIT) ─
+        user = get_cached_user(request.username)
+        cache_hit = user is not None
+        if cache_hit:
+            user = _restore_user_datetimes(user)
+            logger.debug(f"[Auth] user:{request.username} served from Redis cache")
+        else:
+            query = "SELECT * FROM hpe_users WHERE username = %s"
+            user = db.execute_query(query, (request.username,), fetch=True)
+            if user:
+                cache_user(request.username, user)
+
         if not user:
             write_zeek_log(request.username, False, client_ip, is_vpn)
             if is_vpn:
@@ -246,6 +404,8 @@ def login(request: LoginRequest, http_req: Request):
                 # Memory columns may not exist on an un-migrated DB — degrade gracefully
                 logger.warning(f"Login memory update failed (falling back): {mem_err}")
                 db.execute_query("UPDATE hpe_users SET failed_attempts = 0, last_login = NOW() WHERE username = %s", (request.username,))
+            # Invalidate cache — the row has just been mutated
+            invalidate_user_cache(request.username)
 
             write_zeek_log(request.username, True, client_ip, is_vpn)
             if is_vpn:
@@ -304,6 +464,8 @@ def login(request: LoginRequest, http_req: Request):
             except Exception as fa_err:
                 logger.warning(f"Windowed failed-attempt update failed (falling back): {fa_err}")
                 db.execute_query("UPDATE hpe_users SET failed_attempts = failed_attempts + 1 WHERE username = %s", (request.username,))
+            # Invalidate cache — failed_attempts counter has changed
+            invalidate_user_cache(request.username)
             write_zeek_log(request.username, False, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=False)
@@ -388,13 +550,20 @@ def simulate(request: SimulateRequest, http_req: Request):
         client_ip = client_ip.split(",")[0].strip()
         
     try:
-        # 1. Authenticate user
-        query = "SELECT * FROM hpe_users WHERE username = %s"
-        user = db.execute_query(query, (request.username,), fetch=True)
-        
+        # 1. Authenticate user (Redis cache → PostgreSQL fallback)
+        user = get_cached_user(request.username)
+        if user is not None:
+            user = _restore_user_datetimes(user)
+            logger.debug(f"[Auth/simulate] user:{request.username} served from Redis cache")
+        else:
+            query = "SELECT * FROM hpe_users WHERE username = %s"
+            user = db.execute_query(query, (request.username,), fetch=True)
+            if user:
+                cache_user(request.username, user)
+
         if not user or user['password_hash'] != pass_hash:
             raise HTTPException(status_code=401, detail="Invalid username or password")
-            
+
         if user.get('status') == 'pending':
             raise HTTPException(status_code=403, detail="Account awaiting admin approval")
 
@@ -528,6 +697,8 @@ def simulate(request: SimulateRequest, http_req: Request):
                     "UPDATE hpe_users SET last_login = NOW(), last_login_region = %s WHERE username = %s",
                     (selected_ip_region, request.username)
                 )
+            # Invalidate cache — login_region / failed_attempts may have changed
+            invalidate_user_cache(request.username)
         except Exception as mem_err:
             logger.warning(f"Simulation login memory update failed: {mem_err}")
             
