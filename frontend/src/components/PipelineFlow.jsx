@@ -69,7 +69,7 @@ export default function PipelineFlow({
                     <span className="node-icon">{stage.icon}</span>
                   </div>
                   <span className="node-name">{stage.name}</span>
-                  <span className="node-latency">{latency ? `${latency}ms` : '--ms'}</span>
+                  <span className="node-latency">{(latency !== undefined && latency !== null) ? `${latency}ms` : '--ms'}</span>
                 </div>
 
                 {idx < STAGES.length - 1 && (
@@ -136,7 +136,11 @@ export default function PipelineFlow({
                 <span className={`event-badge ${badgeClass}`}>{action}</span>
                 <span className="event-user">{event.event_summary?.user || 'unknown'}</span>
                 <span className="event-ip">{event.event_summary?.source_ip || '--'}</span>
-                <span className="event-process">{event.event_summary?.process_name || '--'}</span>
+                <span className="event-process">
+                  {(event.event_summary?.anomaly_type && event.event_summary?.anomaly_type !== 'None' && event.event_summary?.anomaly_type !== 'unknown') 
+                    ? event.event_summary?.anomaly_type 
+                    : (event.event_summary?.action || '--')}
+                </span>
                 <span className="event-score">{(event.threat_score * 100).toFixed(1)}%</span>
                 <span className="event-time">
                   {event.timestamp ? new Date(event.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString()}
