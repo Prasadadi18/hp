@@ -105,7 +105,7 @@ hpe/
 ├── backend/                    # FastAPI Microservice Backend
 │   ├── app/
 │   │   ├── routes/             # API routes (auth, admin, health, elasticsearch, etc.)
-│   │   ├── database.py         # Postgres connection & execute wrapper
+│   │   ├── db.py               # Postgres connection & execute wrapper
 │   │   ├── kafka_client.py     # Kafka consumer & producer client
 │   │   ├── main.py             # FastAPI App Entrypoint & WebSocket handlers
 │   │   ├── threat_engine.py    # AI Threat Scoring & Feature Engineering
@@ -113,10 +113,11 @@ hpe/
 │   └── Dockerfile              # Dockerfile for Backend
 ├── frontend/                   # 3D WebGL cyber-bento dashboard
 │   ├── src/
-│   │   ├── admin.js            # Admin Console panel & approval/rejection loop
-│   │   ├── dashboard.js        # Main Dashboard state & WebSocket streaming
-│   │   ├── main.js             # Entrypoint & three-globe/WebGL rendering
-│   │   └── styles.css          # Styling & Cyber-Bento Glassmorphic system
+│   │   ├── components/         # React components (StarField, ThreatGlobe, etc.)
+│   │   ├── styles/
+│   │   │   └── index.css       # Styling & Cyber-Bento Glassmorphic system
+│   │   ├── App.jsx             # Main Dashboard state & WebSocket streaming
+│   │   └── main.jsx            # React Entrypoint
 │   ├── index.html              # Main HTML entrypoint
 │   └── Dockerfile              # Dockerfile for Frontend
 ├── public-login/               # Nginx-based Public VPN Portal
@@ -130,11 +131,13 @@ hpe/
 ├── postgres/
 │   └── init/
 │       └── 01_schema.sql       # Postgres initialization schema & seed accounts
+├── run-compose.bat             # Docker Compose one-click launcher
+├── run-local.bat               # Local demo one-click launcher
 ├── vault/
 │   ├── config/
 │   │   └── vault.hcl           # HashiCorp Vault cluster configuration
 │   └── init/
-│       └── setup.sh            # Automated Vault initialization job (AppRole setup, DB engines)
+│       └── init-vault.sh       # Automated Vault initialization job (AppRole setup, DB engines)
 ├── scripts/                    # Utility Pipelines & Replay Engines
 │   ├── replay_live.py          # Synthetic dataset network live replay writer
 │   ├── es_to_kafka.py          # Elasticsearch to Kafka bridge script (watch-optimized)
@@ -179,7 +182,7 @@ You can log in to the **Enterprise Portal** (`http://localhost:8080/`) using the
 
 | Username | Password | Department / Role | Status |
 |----------|----------|-------------------|--------|
-| `admin` | `admin123` | Security (Admin / Audit) | Active |
+| `admin` | `admin` | Security (Admin / Audit) | Active |
 | `alice` | `password123` | Engineering (Developer) | Active |
 | `bob` | `password123` | HR (Employee) | Active |
 | `charlie` | `password123` | Finance (Employee) | Active |
