@@ -91,7 +91,7 @@ export default function App() {
         const data = await res.json();
         const tp = data.total_requests || 0;
         const tt = data.total_threats || 0;
-        const ta = data.total_allowed || 0;
+        const ta = (data.total_allowed || 0) + (data.total_monitored || 0);
         const tb = (data.total_blocked || 0) + (data.total_critical || 0);
         const al = data.avg_latency_ms || 0;
         const at = data.attack_types || {};
@@ -223,15 +223,19 @@ export default function App() {
 
       if (isThreat) {
         threatsInterceptedRef.current += 1;
-        blockedProcessedRef.current += 1;
 
         const aType = prediction.event_summary?.anomaly_type || 'Unknown';
         attackTypesRef.current = {
           ...attackTypesRef.current,
           [aType]: (attackTypesRef.current[aType] || 0) + 1,
         };
-      } else {
+      }
+
+      const threatAction = prediction.threat_action || 'ALLOW';
+      if (threatAction === 'ALLOW' || threatAction === 'MONITOR') {
         allowedProcessedRef.current += 1;
+      } else if (threatAction === 'BLOCK' || threatAction === 'CRITICAL_ALERT') {
+        blockedProcessedRef.current += 1;
       }
 
       setEventsProcessed(totalProcessedRef.current);

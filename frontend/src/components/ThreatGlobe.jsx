@@ -61,6 +61,21 @@ export default function ThreatGlobe({ active, eventsProcessed, threatsIntercepte
       .pointColor(d => d.is_server ? COLORS.cyan : (d.is_threat ? COLORS.threat : COLORS.safe))
       .pointAltitude(d => d.is_server ? 0.06 : 0.015)
       .pointRadius(d => d.is_server ? 0.7 : 0.25)
+      .pointLabel(d => {
+        if (d.is_server) {
+          return `<div style="background: rgba(18, 18, 20, 0.95); border: 2px solid #eae5d9; padding: 8px; font-family: monospace; font-size: 11px; color: #eae5d9; pointer-events: none;">
+            <strong style="color: #0984e3">${d.label}</strong><br/>
+            Location: Bangalore, India<br/>
+            Coords: 12.97°N, 77.59°E
+          </div>`;
+        }
+        return `<div style="background: rgba(18, 18, 20, 0.95); border: 2px solid ${d.is_threat ? '#d63031' : '#2ecc71'}; padding: 8px; font-family: monospace; font-size: 11px; color: #eae5d9; pointer-events: none;">
+          <strong style="color: ${d.is_threat ? '#d63031' : '#2ecc71'}">${d.is_threat ? '⚠ Threat Location' : '✓ Secure Client'}</strong><br/>
+          User: <strong>${d.user || 'Unknown'}</strong><br/>
+          Location: ${d.source_city || 'Unknown'}<br/>
+          IP Coords: ${d.lat.toFixed(2)}°, ${d.lng.toFixed(2)}°
+        </div>`;
+      })
       .pointsMerge(false)
       .pointsTransitionDuration(400)
 
@@ -95,6 +110,7 @@ export default function ThreatGlobe({ active, eventsProcessed, threatsIntercepte
     const renderer = globe.renderer();
     if (renderer) {
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setClearAlpha(0);
     }
 
     globeInstance.current = globe;
@@ -143,6 +159,8 @@ export default function ThreatGlobe({ active, eventsProcessed, threatsIntercepte
           lng: arc.startLng,
           is_threat: arc.is_threat,
           is_server: false,
+          user: arc.user,
+          source_city: arc.source_city,
         });
       });
 
