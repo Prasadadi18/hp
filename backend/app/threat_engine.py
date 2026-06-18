@@ -487,7 +487,7 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
     # Classify anomaly type based on event characteristics
     # This classification happens here (not in raw event processing) so it applies to both
     # simulation portal events and Kafka/Zeek events uniformly
-    anomaly_type = event_dict.get("anomaly_type", "None")
+    anomaly_type = event_dict.get("anomaly_type") or "None"
     geo_mismatch = event_dict.get("geo_mismatch", False)
     impossible_travel = event_dict.get("impossible_travel", False)
     failed_attempts = event_dict.get("failed_attempts_last_15m", 0)
@@ -524,7 +524,7 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
     
     # HARDCODED FIX: If anomaly_type is "None" AND no other real anomalies exist, force ALLOW
     # This handles VPN-only cases where model incorrectly scores high but no real anomaly exists
-    if anomaly_type == "None" and not has_real_anomalies and ensemble_score > threshold:
+    if (anomaly_type == "None" or not anomaly_type) and not has_real_anomalies and ensemble_score > threshold:
         logger.info(f"[Hardcoded Fix] Anomaly type is None and no real anomalies detected, but score is high ({ensemble_score:.4f}). Forcing ALLOW.")
         ensemble_score = threshold * 0.5  # Force well below threshold
         is_threat = False
