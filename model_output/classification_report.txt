@@ -1,17 +1,17 @@
 Confusion Matrix:
-[[4661   51]
- [  47  241]]
+[[4683   29]
+ [  62  226]]
 
 Classification Report:
               precision    recall  f1-score   support
 
       Normal       0.99      0.99      0.99      4712
-      Threat       0.83      0.84      0.83       288
+      Threat       0.89      0.78      0.83       288
 
     accuracy                           0.98      5000
-   macro avg       0.91      0.91      0.91      5000
+   macro avg       0.94      0.89      0.91      5000
 weighted avg       0.98      0.98      0.98      5000
 
 
-Best Threshold: 0.3919
-Training Duration: 75.4s
+Best Threshold: 0.6057
+Training Duration: 94.0s
