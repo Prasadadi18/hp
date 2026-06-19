@@ -606,14 +606,32 @@ body {
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: var(--lime);
   top: 50%;
   left: 0;
   transform: translateY(-50%);
   z-index: 5;
-  box-shadow: 0 0 10px var(--lime), 0 0 20px var(--lime);
-  animation: packet-travel 0.5s linear forwards;
+  animation: packet-travel 0.6s linear forwards;
   will-change: transform, opacity;
+}
+
+.data-packet.packet-green {
+  background: var(--lime);
+  box-shadow: 0 0 10px var(--lime), 0 0 20px var(--lime);
+}
+
+.data-packet.packet-red {
+  background: var(--red-stark);
+  box-shadow: 0 0 10px var(--red-stark), 0 0 20px var(--red-stark);
+}
+
+.data-packet.packet-yellow {
+  background: var(--yellow);
+  box-shadow: 0 0 10px var(--yellow), 0 0 20px var(--yellow);
+}
+
+.data-packet.packet-blue {
+  background: var(--cyan);
+  box-shadow: 0 0 10px var(--cyan), 0 0 20px var(--cyan);
 }
 
 @keyframes packet-travel {

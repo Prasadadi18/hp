@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const STAGES = [
   { name: 'Network / Apps', icon: '🌐' },
@@ -28,34 +28,82 @@ const STAGE_EXPLANATIONS = [
 
 export default function PipelineFlow({
   active,
-  activeStage,
-  activeConnector,
-  isThreatFlow,
   stageLatencies,
   vaultActive,
   vaultLines,
   eventsLog,
 }) {
   const [selectedStage, setSelectedStage] = useState(null);
-  const [isAnimating, setIsAnimating] = useState(false);
-  const [currentConnector, setCurrentConnector] = useState(-1);
+  
+  // Track multiple simultaneous animations (id, connector index, color)
+  const [activeAnimations, setActiveAnimations] = useState([]);
+  
+  // Track the last processed event to detect new events
+  const lastProcessedEventRef = useRef(null);
+  
+  // Unique ID generator for each animation instance
+  const animationIdCounter = useRef(0);
+  
+  // Track number of active animations to prevent performance issues
+  const activeAnimationCountRef = useRef(0);
+  
+  // Maximum simultaneous animations to prevent browser performance issues
+  const MAX_SIMULTANEOUS_ANIMATIONS = 20;
 
-  if (!active) return null;
-
-  const handleFirstStageHover = async () => {
-    if (isAnimating) return;
+  // Start animation immediately when a new event is detected
+  useEffect(() => {
+    if (!active || eventsLog.length === 0) return;
     
-    setIsAnimating(true);
+    const latestEvent = eventsLog[0];
     
-    // Animate through all connectors
-    for (let i = 0; i < 9; i++) {
-      setCurrentConnector(i);
-      await new Promise(resolve => setTimeout(resolve, 500));
+    // Check if this is actually a new event by comparing references and timestamps
+    if (lastProcessedEventRef.current === latestEvent) return;
+    
+    // Update the last processed event
+    lastProcessedEventRef.current = latestEvent;
+    
+    // Safety check: limit simultaneous animations to prevent performance issues
+    if (activeAnimationCountRef.current >= MAX_SIMULTANEOUS_ANIMATIONS) {
+      console.warn(`[Pipeline] Skipping animation - max limit (${MAX_SIMULTANEOUS_ANIMATIONS}) reached`);
+      return;
     }
     
-    setCurrentConnector(-1);
-    setIsAnimating(false);
+    const action = latestEvent.threat_action || 'ALLOW';
+    
+    // Map action to color: Blue=BLOCK, Yellow=MONITOR, Red=CRITICAL, Green=ALLOW
+    let color = 'green';
+    if (action === 'BLOCK') {
+      color = 'blue';
+    } else if (action === 'MONITOR') {
+      color = 'yellow';
+    } else if (action === 'CRITICAL_ALERT') {
+      color = 'red';
+    }
+    
+    // Start animation immediately - no waiting for previous animations to finish
+    startAnimation(color);
+  }, [eventsLog, active]);
+
+  // Animate a colored point through all 9 connectors (10 stages = 9 arrows)
+  const startAnimation = async (color) => {
+    const animationId = animationIdCounter.current++;
+    activeAnimationCountRef.current++;
+    
+    try {
+      // Move through each connector, 600ms per arrow
+      for (let i = 0; i < 9; i++) {
+        // Add/update this animation in the active list
+        setActiveAnimations(prev => [...prev.filter(a => a.id !== animationId), { id: animationId, connector: i, color }]);
+        await new Promise(resolve => setTimeout(resolve, 600));
+      }
+    } finally {
+      // Remove animation when it completes the full pipeline
+      setActiveAnimations(prev => prev.filter(a => a.id !== animationId));
+      activeAnimationCountRef.current--;
+    }
   };
+
+  if (!active) return null;
 
   return (
     <section className="section active" id="pipeline-section">
@@ -64,26 +112,21 @@ export default function PipelineFlow({
       <p style={{ color: 'var(--text-secondary)', maxWidth: '700px', marginBottom: 'var(--space-lg)', fontSize: '14px', lineHeight: '1.6' }}>
         Every network event flows through a 10-stage enterprise security pipeline
         integrated with AI-powered anomaly detection.
-        Hover over Network/Apps to see the flow animation.
+        Watch real-time events animate automatically - green for allow, blue for block, yellow for monitor, red for critical alert.
       </p>
 
       {/* Pipeline Nodes Flowchart */}
       <div style={{ position: 'relative', width: '100%', overflowX: 'auto', overflowY: 'visible', padding: '20px 0' }}>
         <div className="pipeline-flow">
           {STAGES.map((stage, idx) => {
-            const isNodeActive = activeStage === idx;
-            const isNodeThreat = isThreatFlow && activeStage >= idx && activeStage !== -1;
             const latency = stageLatencies[idx];
-            const isFirstStage = idx === 0;
 
             return (
               <React.Fragment key={idx}>
                 <div
-                  className={`pipeline-node ${isNodeActive ? 'active' : ''} ${isNodeThreat ? 'threat' : ''}`}
+                  className="pipeline-node"
                   onClick={() => setSelectedStage(idx)}
-                  onMouseEnter={isFirstStage ? handleFirstStageHover : undefined}
-                  title={isFirstStage ? 'Hover to see flow animation' : `${stage.name} - Click to view details`}
-                  style={isFirstStage ? { cursor: 'pointer', transition: 'all 0.3s ease' } : {}}
+                  title={`${stage.name} - Click to view details`}
                 >
                   <div className="node-icon-wrapper">
                     <span className="node-icon">{stage.icon}</span>
@@ -95,12 +138,16 @@ export default function PipelineFlow({
                 </div>
 
                 {idx < STAGES.length - 1 && (
-                  <div
-                    className={`pipeline-connector ${currentConnector === idx ? 'active' : ''}`}
-                  >
-                    {currentConnector === idx && (
-                      <div className="data-packet" />
-                    )}
+                  <div className="pipeline-connector">
+                    {activeAnimations
+                      .filter(animation => animation.connector === idx)
+                      .map(animation => (
+                        <div
+                          key={animation.id}
+                          className={`data-packet packet-${animation.color}`}
+                        />
+                      ))
+                    }
                   </div>
                 )}
               </React.Fragment>
@@ -109,7 +156,7 @@ export default function PipelineFlow({
         </div>
       </div>
 
-      {/* Vault Credential Rotation Overlay */}
+      {/* Vault Credential Rotation Display */}
       {vaultActive && (
         <div id="vault-terminal" className="vault-terminal" style={{ display: 'block' }}>
           <div className="terminal-header">
@@ -139,7 +186,7 @@ export default function PipelineFlow({
         </div>
       )}
 
-      {/* Event Logs list */}
+      {/* Event Logs */}
       <div className="pipeline-event-log">
         {eventsLog.length === 0 ? (
           <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '12px', padding: 'var(--space-lg)' }}>
