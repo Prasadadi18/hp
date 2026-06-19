@@ -553,15 +553,14 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
             is_threat = False
             threat_action = ThreatAction.ALLOW
     
-    # Case 2: VPN + geo_mismatch = ESCALATE TO CRITICAL (suspicious VPN from an
-    # unexpected location). A VPN login from outside the user's home region is
-    # treated as a critical security event — it creates an admin alert, triggers
-    # credential rotation, and surfaces on the dashboard like any CRITICAL_ALERT.
+    # Case 2: VPN + geo_mismatch = BLOCK (suspicious VPN from an unexpected
+    # location). Creates an admin alert and requires approval for rotation,
+    # but does not escalate to CRITICAL — reserved for impossible travel.
     elif is_vpn and geo_mismatch:
         is_threat = True
-        threat_action = ThreatAction.CRITICAL_ALERT
-        if ensemble_score < 0.90:
-            ensemble_score = 0.90
+        threat_action = ThreatAction.BLOCK
+        if ensemble_score < 0.75:
+            ensemble_score = 0.75
 
     # Generate dynamic threat reasons
     threat_reasons = []
