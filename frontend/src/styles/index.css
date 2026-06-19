@@ -500,6 +500,9 @@ body {
   gap: 0;
   min-width: max-content;
   padding: var(--space-lg) var(--space-md);
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 .pipeline-node {
@@ -510,6 +513,7 @@ body {
   position: relative;
   cursor: pointer;
   transition: transform 0.3s var(--ease-spring);
+  flex-shrink: 0;
 }
 
 .pipeline-node:hover {
@@ -527,7 +531,7 @@ body {
   border: 2px solid var(--panel-border);
   position: relative;
   overflow: hidden;
-  transition: all 0.2s ease;
+  transition: all 0.3s ease;
   box-shadow: 3px 3px 0px rgba(0, 0, 0, 0.95);
 }
 
@@ -542,6 +546,12 @@ body {
   font-size: 24px;
   color: var(--cyan);
   z-index: 1;
+  transition: transform 0.3s ease;
+}
+
+.pipeline-node.active .node-icon,
+.pipeline-node.threat .node-icon {
+  transform: scale(1.2);
 }
 
 .node-name {
@@ -553,33 +563,41 @@ body {
   line-height: 1.2;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  white-space: nowrap;
 }
 
 .node-latency {
   font-size: 9px;
   font-family: var(--font-mono);
   color: var(--text-muted);
+  min-height: 14px;
 }
 
 /* Pipeline connector arrows */
 .pipeline-connector {
   width: 48px;
   height: 2px;
-  background: var(--bg-elevated);
+  background: var(--panel-border);
   position: relative;
   flex-shrink: 0;
+  margin: 0 4px;
+  align-self: flex-start;
+  margin-top: 31px;
+  transition: all 0.3s ease;
 }
 
 .pipeline-connector::after {
   content: '';
   position: absolute;
-  right: -4px;
-  top: -3px;
+  right: -5px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 0;
   height: 0;
-  border-left: 6px solid var(--bg-elevated);
+  border-left: 8px solid var(--panel-border);
   border-top: 4px solid transparent;
   border-bottom: 4px solid transparent;
+  transition: border-left-color 0.3s ease;
 }
 
 /* Animated data packet traveling through pipeline */
@@ -587,62 +605,75 @@ body {
   position: absolute;
   width: 10px;
   height: 10px;
-  border-radius: 0; /* Square moving blocks */
-  top: -4px;
-  left: 0px;
+  border-radius: 50%;
+  background: var(--lime);
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
   z-index: 5;
-  animation: packet-travel 0.8s linear forwards;
+  box-shadow: 0 0 10px var(--lime), 0 0 20px var(--lime);
+  animation: packet-travel 0.5s linear forwards;
   will-change: transform, opacity;
 }
 
-.data-packet.safe {
-  background: var(--lime);
-  box-shadow: 2px 2px 0px rgba(0, 0, 0, 0.5);
-}
-
-.data-packet.threat {
-  background: var(--red-stark);
-  box-shadow: 2px 2px 0px rgba(0, 0, 0, 0.5);
-}
-
 @keyframes packet-travel {
-  0% { transform: translateX(-10px); opacity: 0; }
-  10% { opacity: 1; transform: translateX(-5px); }
-  90% { opacity: 1; transform: translateX(50px); }
-  100% { transform: translateX(58px); opacity: 0; }
+  0% { 
+    transform: translate(-10px, -50%); 
+    opacity: 0; 
+  }
+  10% { 
+    opacity: 1; 
+    transform: translate(0px, -50%); 
+  }
+  90% { 
+    opacity: 1; 
+    transform: translate(48px, -50%); 
+  }
+  100% { 
+    transform: translate(56px, -50%); 
+    opacity: 0; 
+  }
 }
 
 /* Active node states */
 .pipeline-node.active .node-icon-wrapper {
   border-color: var(--lime);
-  background: rgba(46, 204, 113, 0.1);
-  box-shadow: 3px 3px 0px rgba(0, 0, 0, 0.95);
+  background: rgba(46, 204, 113, 0.15);
+  box-shadow: 0 0 20px rgba(46, 204, 113, 0.4), 3px 3px 0px rgba(0, 0, 0, 0.95);
+}
+
+.pipeline-node.active .node-icon {
+  color: var(--lime);
 }
 
 .pipeline-node.threat .node-icon-wrapper {
-  border-color: var(--red-stark);
-  background: rgba(214, 48, 49, 0.1);
-  box-shadow: 3px 3px 0px rgba(0, 0, 0, 0.95);
+  border-color: var(--red-stark) !important;
+  background: rgba(214, 48, 49, 0.15) !important;
+  box-shadow: 0 0 20px rgba(214, 48, 49, 0.4), 3px 3px 0px rgba(0, 0, 0, 0.95) !important;
   animation: threat-pulse 0.6s ease-in-out infinite;
 }
 
-@keyframes threat-pulse {
-  0%, 100% { background: rgba(214, 48, 49, 0.1); }
-  50% { background: rgba(214, 48, 49, 0.4); }
+.pipeline-node.threat .node-icon {
+  color: var(--red-stark) !important;
 }
 
+@keyframes threat-pulse {
+  0%, 100% { 
+    background: rgba(214, 48, 49, 0.15);
+    box-shadow: 0 0 20px rgba(214, 48, 49, 0.4), 3px 3px 0px rgba(0, 0, 0, 0.95);
+  }
+  50% { 
+    background: rgba(214, 48, 49, 0.35);
+    box-shadow: 0 0 30px rgba(214, 48, 49, 0.6), 3px 3px 0px rgba(0, 0, 0, 0.95);
+  }
+}
+
+/* Connector color states - SIMPLIFIED for visibility */
 .pipeline-connector.active {
   background: var(--lime);
 }
 .pipeline-connector.active::after {
   border-left-color: var(--lime);
-}
-
-.pipeline-connector.threat {
-  background: var(--red-stark);
-}
-.pipeline-connector.threat::after {
-  border-left-color: var(--red-stark);
 }
 
 /* Pipeline event log */
@@ -1036,9 +1067,21 @@ body {
   }
   .section-heading { font-size: 24px; }
   .hud-value { font-size: 22px; }
-  .pipeline-flow { gap: 0; }
-  .pipeline-connector { width: 24px; }
-  .node-icon-wrapper { width: 48px; height: 48px; }
+  .pipeline-flow { 
+    gap: 0;
+    justify-content: flex-start;
+  }
+  .pipeline-connector { 
+    width: 32px;
+    margin: 0 2px;
+  }
+  .node-icon-wrapper { 
+    width: 56px; 
+    height: 56px; 
+  }
+  .node-icon {
+    font-size: 20px;
+  }
   .globe-hud { display: none; }
   .dashboard-grid { grid-template-columns: 1fr; }
 }

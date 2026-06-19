@@ -37,8 +37,25 @@ export default function PipelineFlow({
   eventsLog,
 }) {
   const [selectedStage, setSelectedStage] = useState(null);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [currentConnector, setCurrentConnector] = useState(-1);
 
   if (!active) return null;
+
+  const handleFirstStageHover = async () => {
+    if (isAnimating) return;
+    
+    setIsAnimating(true);
+    
+    // Animate through all connectors
+    for (let i = 0; i < 9; i++) {
+      setCurrentConnector(i);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    setCurrentConnector(-1);
+    setIsAnimating(false);
+  };
 
   return (
     <section className="section active" id="pipeline-section">
@@ -47,37 +64,42 @@ export default function PipelineFlow({
       <p style={{ color: 'var(--text-secondary)', maxWidth: '700px', marginBottom: 'var(--space-lg)', fontSize: '14px', lineHeight: '1.6' }}>
         Every network event flows through a 10-stage enterprise security pipeline
         integrated with AI-powered anomaly detection.
-        Watch events flow in real-time — green for safe, red for threats.
+        Hover over Network/Apps to see the flow animation.
       </p>
 
       {/* Pipeline Nodes Flowchart */}
-      <div style={{ position: 'relative' }}>
+      <div style={{ position: 'relative', width: '100%', overflowX: 'auto', overflowY: 'visible', padding: '20px 0' }}>
         <div className="pipeline-flow">
           {STAGES.map((stage, idx) => {
             const isNodeActive = activeStage === idx;
             const isNodeThreat = isThreatFlow && activeStage >= idx && activeStage !== -1;
             const latency = stageLatencies[idx];
+            const isFirstStage = idx === 0;
 
             return (
               <React.Fragment key={idx}>
                 <div
                   className={`pipeline-node ${isNodeActive ? 'active' : ''} ${isNodeThreat ? 'threat' : ''}`}
                   onClick={() => setSelectedStage(idx)}
-                  title="Click to view details"
+                  onMouseEnter={isFirstStage ? handleFirstStageHover : undefined}
+                  title={isFirstStage ? 'Hover to see flow animation' : `${stage.name} - Click to view details`}
+                  style={isFirstStage ? { cursor: 'pointer', transition: 'all 0.3s ease' } : {}}
                 >
                   <div className="node-icon-wrapper">
                     <span className="node-icon">{stage.icon}</span>
                   </div>
                   <span className="node-name">{stage.name}</span>
-                  <span className="node-latency">{(latency !== undefined && latency !== null) ? `${latency}ms` : '--ms'}</span>
+                  <span className="node-latency">
+                    {(latency !== undefined && latency !== null && latency > 0) ? `${latency}ms` : '--ms'}
+                  </span>
                 </div>
 
                 {idx < STAGES.length - 1 && (
                   <div
-                    className={`pipeline-connector ${activeConnector === idx ? 'active' : ''} ${isThreatFlow && activeConnector >= idx ? 'threat' : ''}`}
+                    className={`pipeline-connector ${currentConnector === idx ? 'active' : ''}`}
                   >
-                    {activeConnector === idx && (
-                      <div className={`data-packet ${isThreatFlow ? 'threat' : 'safe'}`} />
+                    {currentConnector === idx && (
+                      <div className="data-packet" />
                     )}
                   </div>
                 )}
