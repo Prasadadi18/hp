@@ -83,12 +83,6 @@ async def simulate_stream(websocket: WebSocket):
     _load_sim_index()
 
     total = len(_test_events)
-    if total == 0:
-        await websocket.send_json({
-            "type": "error",
-            "data": {"message": "No test events loaded"},
-        })
-        return
 
     # Determine server location
     server_info = {"lat": 12.97, "lng": 77.59, "city": "Bangalore"}
@@ -111,6 +105,22 @@ async def simulate_stream(websocket: WebSocket):
 
     # Register this WebSocket to receive broadcast results
     ws_manager.add(websocket)
+
+    # Portal-only mode: no synthetic dataset to stream. Keep the connection
+    # OPEN and registered so REAL events broadcast via ws_manager (portal
+    # logins/simulations from auth.py, or the Kafka consumer) are delivered to
+    # the dashboard. Returning here would close the WS, drop the client from
+    # ws_manager, and trigger the frontend's local-simulation fallback.
+    if total == 0:
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            ws_manager.remove(websocket)
+        except Exception as e:
+            ws_manager.remove(websocket)
+            logger.error(f"Simulate WS (portal-only keep-alive) error: {e}")
+        return
 
     try:
         # Loop continuously through events

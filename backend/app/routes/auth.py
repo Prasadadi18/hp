@@ -278,6 +278,75 @@ def _broadcast_vpn_alert(username: str, client_ip: str, vpn_info: dict, login_su
         logger.warning(f"Failed to send VPN alert email: {e}")
 
 
+def _process_vpn_login_event(username: str, client_ip: str, vpn_info: dict):
+    """
+    Run a detected VPN login through the FULL threat engine as a CRITICAL event,
+    then broadcast it like any other critical alert — so it appears on the 3D
+    dashboard (globe + pipeline) AND in the admin console alert queue, not just
+    as a toast banner.
+
+    NOTE: credentials are NOT rotated automatically (force_rotation is left at
+    its default False). The portal login proceeds normally (no lockout); the
+    VPN event simply creates a pending CRITICAL alert for the admin to review.
+    """
+    try:
+        profile = next((p for p in vault_client._user_profiles if p.get("user_id") == username), None) or {}
+        home_region = profile.get("home_region", "US-East")
+        # The VPN exit region (from ip-api) differs from home → geographic anomaly,
+        # which the threat engine escalates to CRITICAL for a VPN login.
+        vpn_region = vpn_info.get("region") or vpn_info.get("country") or "VPN-Unknown"
+
+        event_dict = {
+            "event_id": str(uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "login_hour": datetime.now(timezone.utc).hour,
+            "user_id": username,
+            "workspace_id": "WS-PORTAL",
+            "source_ip": client_ip,
+            "ip_region": vpn_region,
+            "user_region": home_region,
+            "geo_mismatch": True,
+            "impossible_travel": False,
+            "action": "login",
+            "success": True,
+            "failed_attempts_last_15m": 0,
+            "data_downloaded_mb": profile.get("avg_daily_downloads_mb", 10.0),
+            "role": profile.get("role", "Employee"),
+            "remote_worker": profile.get("remote_worker", False),
+            "base_login_hour": profile.get("base_login_hour", 9.0),
+            "login_hour_std_dev": profile.get("login_hour_std_dev", 2.0),
+            "avg_daily_downloads_mb": profile.get("avg_daily_downloads_mb", 50.0),
+            "home_region": home_region,
+            "is_shift_worker": profile.get("is_shift_worker", False),
+            "clumsiness_factor": profile.get("clumsiness_factor", 0.0),
+            "is_injected_anomaly": True,
+            "anomaly_type": "VPN with Geographic Anomaly",
+            "event_source": "vpn_login",
+            "is_vpn": True,
+        }
+        event = NetworkEvent(**{k: v for k, v in event_dict.items() if k in NetworkEvent.model_fields})
+        # No force_rotation: do NOT auto-rotate. Creates a pending CRITICAL alert
+        # only — the portal login stays normal and the admin decides on rotation.
+        result = process_event(event)
+        result_data = result.model_dump()
+
+        from app.ws_manager import manager as ws_manager, admin_manager
+        from app import admin_store
+        ws_manager.broadcast_sync({
+            "type": "pipeline_result",
+            "data": {"event": result.event_summary, "prediction": result_data},
+        })
+        alert_id = result.event_summary.get("alert_id")
+        if alert_id:
+            alert = admin_store.get_alert(alert_id)
+            if alert:
+                admin_manager.broadcast_sync({"type": "new_alert", "data": alert})
+        logger.warning(f"🛡️ VPN login processed as CRITICAL for {username} "
+                       f"(action={result.event_summary.get('threat_action')}, alert={alert_id})")
+    except Exception as e:
+        logger.error(f"VPN login event processing failed for {username}: {e}")
+
+
 def write_zeek_log(username: str, success: bool, request_ip: str, is_vpn: bool = False):
     """Write login attempt as a Zeek TSV log line to be picked up by Filebeat."""
     log_path = os.environ.get("ZEEK_LOG_PATH", "/shared-data/zeek-live/conn.log")
@@ -345,14 +414,11 @@ def login(request: LoginRequest, http_req: Request):
                 cache_user(request.username, user)
 
         if not user:
-            write_zeek_log(request.username, False, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=False)
             raise HTTPException(status_code=401, detail="Invalid username or password")
 
         if user.get('status') == 'pending':
-            # Log as failure to Zeek to trigger pipeline visibility
-            write_zeek_log(request.username, False, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=False)
             raise HTTPException(status_code=403, detail="Account awaiting admin approval")
@@ -407,9 +473,12 @@ def login(request: LoginRequest, http_req: Request):
             # Invalidate cache — the row has just been mutated
             invalidate_user_cache(request.username)
 
-            write_zeek_log(request.username, True, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=True)
+                # Treat the VPN login as a full CRITICAL event: score it, create
+                # an admin alert, rotate credentials, and broadcast to dashboard
+                # + admin console (not just the toast banner above).
+                _process_vpn_login_event(request.username, client_ip, vpn_info)
 
             # ── Brute-force auto-rotation ──────────────────────────────────────
             # Rotate immediately on the suspicious login. rotate_credentials()
@@ -466,17 +535,14 @@ def login(request: LoginRequest, http_req: Request):
                 db.execute_query("UPDATE hpe_users SET failed_attempts = failed_attempts + 1 WHERE username = %s", (request.username,))
             # Invalidate cache — failed_attempts counter has changed
             invalidate_user_cache(request.username)
-            write_zeek_log(request.username, False, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=False)
             raise HTTPException(status_code=401, detail="Invalid username or password")
-            
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Database error during login: {e}")
-        # Even on DB error, write a failure Zeek log
-        write_zeek_log(request.username, False, client_ip, is_vpn)
         if is_vpn:
             _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=False)
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -666,8 +732,9 @@ def simulate(request: SimulateRequest, http_req: Request):
         # 5. Process event directly through threat engine (forcing rotation on BLOCK/CRITICAL)
         result = process_event(event, force_rotation=True)
         
-        # 6. Write Zeek log for pipeline visibility
-        write_zeek_log(request.username, True, client_ip, is_vpn)
+        # 6. Skip Zeek log — the direct WS broadcast below is the authoritative
+        #    source for pipeline visibility. Writing a Zeek log here would cause
+        #    Filebeat/Kafka to reprocess the event and produce a duplicate entry.
 
         # 7. Add credentials rotated flags to output
         result_data = result.model_dump()
@@ -705,7 +772,26 @@ def simulate(request: SimulateRequest, http_req: Request):
         result_data["credentials_rotated"] = rotated
         if rotated and new_password:
             result_data["new_password"] = new_password
-            
+
+        # Push this event to the live 3D dashboard + admin console. In
+        # portal-only mode there is no Kafka pipeline, so the portal itself must
+        # broadcast — otherwise normal/critical portal events never appear on
+        # the dashboard (only the portal popup sees them).
+        try:
+            from app.ws_manager import manager as ws_manager, admin_manager
+            from app import admin_store
+            ws_manager.broadcast_sync({
+                "type": "pipeline_result",
+                "data": {"event": result.event_summary, "prediction": result_data},
+            })
+            alert_id = result.event_summary.get("alert_id")
+            if alert_id:
+                alert = admin_store.get_alert(alert_id)
+                if alert:
+                    admin_manager.broadcast_sync({"type": "new_alert", "data": alert})
+        except Exception as bc_err:
+            logger.warning(f"Failed to broadcast simulation event to dashboard: {bc_err}")
+
         return result_data
 
     except HTTPException:

@@ -1,5 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 
+const formatIpShort = (ip) => {
+  if (!ip) return '--';
+  if (ip.includes(':') && ip.length > 15) {
+    const parts = ip.split(':');
+    return `${parts[0]}:${parts[1]}:…`;
+  }
+  return ip;
+};
+
 const STAGES = [
   { name: 'Network / Apps', icon: '🌐' },
   { name: 'Zeek / Suricata', icon: '🛡️' },
@@ -50,37 +59,27 @@ export default function PipelineFlow({
   // Maximum simultaneous animations to prevent browser performance issues
   const MAX_SIMULTANEOUS_ANIMATIONS = 20;
 
-  // Start animation immediately when a new event is detected
+  // Start animation for every new event (ALLOW=green, MONITOR=yellow, BLOCK=blue, CRITICAL=red)
   useEffect(() => {
     if (!active || eventsLog.length === 0) return;
-    
+
     const latestEvent = eventsLog[0];
-    
-    // Check if this is actually a new event by comparing references and timestamps
+
     if (lastProcessedEventRef.current === latestEvent) return;
-    
-    // Update the last processed event
     lastProcessedEventRef.current = latestEvent;
-    
-    // Safety check: limit simultaneous animations to prevent performance issues
+
+    const action = latestEvent.threat_action || 'ALLOW';
+
     if (activeAnimationCountRef.current >= MAX_SIMULTANEOUS_ANIMATIONS) {
       console.warn(`[Pipeline] Skipping animation - max limit (${MAX_SIMULTANEOUS_ANIMATIONS}) reached`);
       return;
     }
-    
-    const action = latestEvent.threat_action || 'ALLOW';
-    
-    // Map action to color: Blue=BLOCK, Yellow=MONITOR, Red=CRITICAL, Green=ALLOW
+
     let color = 'green';
-    if (action === 'BLOCK') {
-      color = 'blue';
-    } else if (action === 'MONITOR') {
-      color = 'yellow';
-    } else if (action === 'CRITICAL_ALERT') {
-      color = 'red';
-    }
-    
-    // Start animation immediately - no waiting for previous animations to finish
+    if (action === 'MONITOR') color = 'yellow';
+    else if (action === 'BLOCK') color = 'blue';
+    else if (action === 'CRITICAL_ALERT') color = 'red';
+
     startAnimation(color);
   }, [eventsLog, active]);
 
@@ -88,16 +87,13 @@ export default function PipelineFlow({
   const startAnimation = async (color) => {
     const animationId = animationIdCounter.current++;
     activeAnimationCountRef.current++;
-    
+
     try {
-      // Move through each connector, 600ms per arrow
       for (let i = 0; i < 9; i++) {
-        // Add/update this animation in the active list
         setActiveAnimations(prev => [...prev.filter(a => a.id !== animationId), { id: animationId, connector: i, color }]);
-        await new Promise(resolve => setTimeout(resolve, 600));
+        await new Promise(resolve => setTimeout(resolve, 150));
       }
     } finally {
-      // Remove animation when it completes the full pipeline
       setActiveAnimations(prev => prev.filter(a => a.id !== animationId));
       activeAnimationCountRef.current--;
     }
@@ -110,9 +106,9 @@ export default function PipelineFlow({
       <div className="section-title">Security Pipeline</div>
       <h2 className="section-heading">Full Enterprise Pipeline Flow</h2>
       <p style={{ color: 'var(--text-secondary)', maxWidth: '700px', marginBottom: 'var(--space-lg)', fontSize: '14px', lineHeight: '1.6' }}>
-        Every network event flows through a 10-stage enterprise security pipeline
+        Every threat event flows through a 10-stage enterprise security pipeline
         integrated with AI-powered anomaly detection.
-        Watch real-time events animate automatically - green for allow, blue for block, yellow for monitor, red for critical alert.
+        Only non-compliant events are shown — blue for block, yellow for monitor, red for critical alert.
       </p>
 
       {/* Pipeline Nodes Flowchart */}
@@ -186,14 +182,17 @@ export default function PipelineFlow({
         </div>
       )}
 
-      {/* Event Logs */}
+      {/* Event Logs — all processed events */}
       <div className="pipeline-event-log">
-        {eventsLog.length === 0 ? (
-          <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '12px', padding: 'var(--space-lg)' }}>
-            Waiting for events...
-          </div>
-        ) : (
-          eventsLog.map((event, idx) => {
+        {(() => {
+          if (eventsLog.length === 0) {
+            return (
+              <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '12px', padding: 'var(--space-lg)' }}>
+                No events yet — press Launch Simulation to begin.
+              </div>
+            );
+          }
+          return eventsLog.map((event, idx) => {
             const action = event.threat_action || 'ALLOW';
             const badgeClass = action === 'ALLOW' ? 'allow'
               : action === 'MONITOR' ? 'monitor'
@@ -202,12 +201,12 @@ export default function PipelineFlow({
 
             return (
               <div className="pipeline-event" key={idx}>
-                <span className={`event-badge ${badgeClass}`}>{action}</span>
+                <span className={`event-badge ${badgeClass}`}>{action.replace('_', ' ')}</span>
                 <span className="event-user">{event.event_summary?.user || 'unknown'}</span>
-                <span className="event-ip">{event.event_summary?.source_ip || '--'}</span>
+                <span className="event-ip" title={event.event_summary?.source_ip || ''}>{formatIpShort(event.event_summary?.source_ip)}</span>
                 <span className="event-process">
-                  {(event.event_summary?.anomaly_type && event.event_summary?.anomaly_type !== 'None' && event.event_summary?.anomaly_type !== 'unknown') 
-                    ? event.event_summary?.anomaly_type 
+                  {(event.event_summary?.anomaly_type && event.event_summary?.anomaly_type !== 'None' && event.event_summary?.anomaly_type !== 'unknown')
+                    ? event.event_summary?.anomaly_type
                     : (event.event_summary?.action || '--')}
                 </span>
                 <span className="event-score">{(event.threat_score * 100).toFixed(1)}%</span>
@@ -216,8 +215,8 @@ export default function PipelineFlow({
                 </span>
               </div>
             );
-          })
-        )}
+          });
+        })()}
       </div>
 
       <footer className="section-footer">

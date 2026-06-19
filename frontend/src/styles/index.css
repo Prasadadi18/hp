@@ -747,7 +747,7 @@ body {
 }
 
 .event-user { color: var(--text-primary); min-width: 120px; }
-.event-ip { color: var(--cyan-dim); min-width: 100px; }
+.event-ip { color: var(--cyan-dim); min-width: 80px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .event-process { color: var(--text-secondary); }
 .event-score { color: var(--amber); min-width: 60px; text-align: right; }
 .event-time { color: var(--text-muted); min-width: 80px; text-align: right; }
@@ -1854,6 +1854,9 @@ body {
 .admin-fact-val {
   color: var(--text-primary);
   font-weight: 600;
+  word-break: break-all;
+  max-width: 60%;
+  text-align: right;
 }
 
 .admin-fact-val.danger { color: var(--magenta); font-weight: 700; }

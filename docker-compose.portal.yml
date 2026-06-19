@@ -1,0 +1,286 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.portal.yml
+#
+# Portal-Only Mode: Full pipeline stack WITHOUT dataset streaming.
+# Only data from the Ngrok public login portal flows through the pipeline.
+#
+# Usage:
+#   docker compose -f docker-compose.portal.yml up -d --build
+#
+# Or use the convenience launcher:
+#   run-portal.bat
+#
+# Data Flow:
+#   Public Login / Simulate (Ngrok / Dashboard)
+#     → Backend → process_event() → WebSocket broadcast
+#     → AI Engine → Full Pipeline → 3D Dashboard
+#
+# Excluded services (not needed in portal mode):
+#   - zeek            (static PCAP processing)
+#   - filebeat        (dataset log shipping)
+#   - es-to-kafka     (ES→Kafka bridge — removed, backend broadcasts directly)
+#   - filebeat-live   (Zeek log watcher — removed, no write_zeek_log calls)
+#   - replay          (dataset conn.log replay)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Apache Kafka (KRaft mode — Official Apache Image) ──
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: hpe-kafka
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list" ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - hpe-network
+
+  # ── Elasticsearch (single-node dev mode) ──
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.15.0
+    container_name: hpe-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [ "CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hpe-network
+
+  # ── Kibana (log visualization) ──
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.15.0
+    container_name: hpe-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+    volumes:
+      - kibana_data:/usr/share/kibana/data
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - hpe-network
+
+  # ── PostgreSQL ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: hpe-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=vault-root
+      - POSTGRES_PASSWORD=vault-root-secret
+      - POSTGRES_DB=hpedb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U vault-root -d hpedb" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hpe-network
+
+  # ── HashiCorp Vault (server mode — persistent Raft storage) ──
+  vault:
+    image: hashicorp/vault:1.15.6
+    container_name: hpe-vault
+    ports:
+      - "8200:8200"
+      - "8201:8201"
+    environment:
+      - VAULT_ADDR=http://0.0.0.0:8200
+      - VAULT_API_ADDR=http://vault:8200
+      - VAULT_CLUSTER_ADDR=http://vault:8201
+      - SKIP_CHOWN=true
+      - SKIP_SETCAP=true
+    entrypoint: vault
+    command: server -config=/vault/config/vault.hcl
+    volumes:
+      - ./vault/config:/vault/config
+      - vault_data:/vault/data
+    healthcheck:
+      test: [ "CMD-SHELL", "vault status -address=http://127.0.0.1:8200 2>&1 | grep -E 'Initialized|Sealed'" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hpe-network
+
+  # ── Vault Init (runs once after vault + postgres are healthy, then exits) ──
+  vault-init:
+    image: hashicorp/vault:1.15.6
+    container_name: hpe-vault-init
+    environment:
+      - VAULT_ADDR=http://vault:8200
+    entrypoint: sh
+    command: /vault/init/init-vault.sh
+    volumes:
+      - ./vault/init:/vault/init
+      - vault_data:/vault/data
+    depends_on:
+      vault:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - hpe-network
+    restart: "no"
+
+  # ── FastAPI Backend ──
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: hpe-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - VAULT_ADDR=http://vault:8200
+      - POSTGRES_URL=postgresql://vault-root:vault-root-secret@postgres:5432/hpedb
+      - MODEL_PATH=/app/model_output/pipeline_artifacts_v2.joblib
+      - TEST_EVENTS_PATH=/dev/null/no-test-events.json
+      - PROFILES_PATH=/app/model_output/user_profiles.json
+      - ZEEK_LOG_PATH=/app/dataset/zeek-live/conn.log
+      - PORTAL_ONLY_MODE=true
+      # ── SOAR Email Alerts ───────────────────────────────────────────────────
+      - SOAR_EMAIL_ENABLED=true
+      - SOAR_SMTP_HOST=smtp.gmail.com
+      - SOAR_SMTP_PORT=587
+      - SOAR_SENDER_EMAIL=adinarayan736@gmail.com
+      - SOAR_SENDER_PASSWORD=nesx dyas qomw zvit
+      - SOAR_RECEIVER_EMAIL=adinarayan736@gmail.com
+      # ── Credential Rotation Mode ──────────────────────────────────────────
+      - ENABLE_AUTO_USER_ROTATION=false
+    volumes:
+      - ./model_output:/app/model_output:ro
+      - ./dataset:/app/dataset
+      - vault_data:/vault/data:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      vault:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      vault-init:
+        condition: service_completed_successfully
+    networks:
+      - hpe-network
+
+  # ── Frontend (Vite dev server) ──
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: hpe-frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    networks:
+      - hpe-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: hpe-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - hpe-network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Public Login Portal (Served via Nginx) ──
+  login-portal:
+    image: nginx:alpine
+    container_name: hpe-login-portal
+    ports:
+      - "8080:80"
+    volumes:
+      - ./public-login:/usr/share/nginx/html:ro
+      - ./public-login/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    networks:
+      - hpe-network
+
+  adminer:
+    image: adminer
+    container_name: hpe-adminer
+    ports:
+      - "9090:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+      - ADMINER_PLUGINS=frames
+    depends_on:
+      - postgres
+    networks:
+      - hpe-network
+
+  # ── Ngrok Tunnel (Unified Public Access) ──
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: hpe-ngrok
+    volumes:
+      - ./ngrok.yml:/etc/ngrok.yml:ro
+    command:
+      - start
+      - --all
+      - --config
+      - /etc/ngrok.yml
+    ports:
+      - "4040:4040"
+    depends_on:
+      - login-portal
+      - backend
+    networks:
+      - hpe-network
+
+volumes:
+  kafka_data:
+  es_data:
+  kibana_data:
+  vault_data:
+  postgres_data:
+
+networks:
+  hpe-network:
+    driver: bridge

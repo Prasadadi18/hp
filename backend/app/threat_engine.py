@@ -440,7 +440,7 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
     Network → Zeek/Suricata → Beats → Kafka → AI → SOAR → Vault → Rotation → Dist → ELK
     """
     t0 = time.time()
-    event_id = str(uuid.uuid4())[:12]
+    event_id = event.event_id if event.event_id else str(uuid.uuid4())[:12]
     event_dict = event.model_dump()
     stages: List[PipelineStageResult] = []
 
@@ -553,17 +553,15 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
             is_threat = False
             threat_action = ThreatAction.ALLOW
     
-    # Case 2: VPN + geo_mismatch = ESCALATE (suspicious VPN from unexpected location)
+    # Case 2: VPN + geo_mismatch = ESCALATE TO CRITICAL (suspicious VPN from an
+    # unexpected location). A VPN login from outside the user's home region is
+    # treated as a critical security event — it creates an admin alert, triggers
+    # credential rotation, and surfaces on the dashboard like any CRITICAL_ALERT.
     elif is_vpn and geo_mismatch:
         is_threat = True
-        # Escalate threat level if model didn't already flag it as high-severity
-        if threat_action == ThreatAction.ALLOW:
-            threat_action = ThreatAction.MONITOR
-        elif threat_action == ThreatAction.MONITOR:
-            threat_action = ThreatAction.BLOCK
-        # Boost score to ensure it's treated seriously, but don't override strong model signals
-        if ensemble_score < 0.70:
-            ensemble_score = 0.72
+        threat_action = ThreatAction.CRITICAL_ALERT
+        if ensemble_score < 0.90:
+            ensemble_score = 0.90
 
     # Generate dynamic threat reasons
     threat_reasons = []
@@ -929,10 +927,12 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
     stages_dicts = [s.model_dump() for s in stages]
     alert_id = None
 
-    # Skip alert creation for live_portal auth events only
-    # Live portal auth: These are user logins through the Enterprise Login Portal - they get 
-    # real-time feedback in the portal UI, so we don't create duplicate admin alerts.
-    # Simulation portal: DOES create alerts - these are security tests that admins should review.
+    # Suppress admin alert for plain portal logins (event_source == "live_portal") —
+    # the user already gets real-time feedback in the portal UI.
+    # VPN-detected logins use event_source == "vpn_login" and are NOT suppressed;
+    # they always need an admin alert for security review.
+    # Simulation portal events (event_source == "threat_simulation_portal") also
+    # create alerts as those are explicit security tests.
     event_source = event_dict.get("event_source", "")
     user_id = event_dict.get("user_id", "")
     is_live_auth = (event_source == "live_portal")
