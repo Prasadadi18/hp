@@ -151,8 +151,15 @@ export default function App() {
         return next.length > 50 ? next.slice(-50) : next;
       });
 
-      // 2. Animate Pipeline
+      // 2. Update Pipeline Stage Latencies
       const stages = prediction.pipeline_stages || [];
+      
+      // Always update latencies for display
+      if (stages && stages.length > 0) {
+        setStageLatencies(stages.map(s => parseFloat(s.latency_ms?.toFixed(1) || 0)));
+      }
+      
+      // Only run the old animation system for live portal events
       if (shouldAnimate) {
         // Set threat flow state FIRST before animation starts
         setIsThreatFlow(isThreat);
@@ -167,14 +174,6 @@ export default function App() {
         for (let i = 0; i < 10; i++) {
           if (!isMounted) return;
           setActiveStage(i);
-
-          if (stages[i]) {
-            setStageLatencies(prev => {
-              const next = [...prev];
-              next[i] = parseFloat(stages[i].latency_ms?.toFixed(1) || 0);
-              return next;
-            });
-          }
 
           // Vault specific visualization on Stage 6
           if (i === 6 && isThreat) {
@@ -205,7 +204,7 @@ export default function App() {
 
           if (i < 9) {
             setActiveConnector(i);
-            await sleep(300); // Longer delay so color is visible
+            await sleep(300);
           }
           await sleep(150);
         }
@@ -216,9 +215,7 @@ export default function App() {
         setActiveConnector(-1);
         setIsThreatFlow(false);
       } else {
-        // Skip slow animation, update latencies directly
-        setStageLatencies(stages.map(s => parseFloat(s.latency_ms?.toFixed(1) || 0)));
-        await sleep(800);
+        await sleep(500);
       }
 
       // 3. Show Temporary Result Banner
