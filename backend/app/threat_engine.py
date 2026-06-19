@@ -553,9 +553,15 @@ def process_event(event: NetworkEvent, force_rotation: bool = False) -> Predicti
             is_threat = False
             threat_action = ThreatAction.ALLOW
     
-    # Case 2: VPN + geo_mismatch = BLOCK (suspicious VPN from an unexpected
-    # location). Creates an admin alert and requires approval for rotation,
-    # but does not escalate to CRITICAL — reserved for impossible travel.
+    # Case 2a: VPN + impossible_travel = CRITICAL_ALERT (tunnel hopping / account hijack)
+    elif is_vpn and impossible_travel:
+        is_threat = True
+        threat_action = ThreatAction.CRITICAL_ALERT
+        if ensemble_score < 0.90:
+            ensemble_score = 0.90
+
+    # Case 2b: VPN + geo_mismatch (no impossible travel) = BLOCK
+    # Creates an admin alert and requires approval, but does not escalate to CRITICAL.
     elif is_vpn and geo_mismatch:
         is_threat = True
         threat_action = ThreatAction.BLOCK
