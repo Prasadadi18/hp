@@ -154,10 +154,15 @@ export default function App() {
       // 2. Animate Pipeline
       const stages = prediction.pipeline_stages || [];
       if (shouldAnimate) {
+        // Set threat flow state FIRST before animation starts
         setIsThreatFlow(isThreat);
+        
         // Clean stages and active connector
         setActiveStage(-1);
         setActiveConnector(-1);
+        
+        // Small delay to ensure state is set
+        await sleep(50);
 
         for (let i = 0; i < 10; i++) {
           if (!isMounted) return;
@@ -200,10 +205,16 @@ export default function App() {
 
           if (i < 9) {
             setActiveConnector(i);
-            await sleep(120);
+            await sleep(300); // Longer delay so color is visible
           }
-          await sleep(100);
+          await sleep(150);
         }
+        
+        // Reset animation states after completion
+        await sleep(800);
+        setActiveStage(-1);
+        setActiveConnector(-1);
+        setIsThreatFlow(false);
       } else {
         // Skip slow animation, update latencies directly
         setStageLatencies(stages.map(s => parseFloat(s.latency_ms?.toFixed(1) || 0)));
