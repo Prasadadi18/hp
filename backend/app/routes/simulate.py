@@ -51,6 +51,13 @@ def _save_sim_index():
         except Exception as e:
             logger.error(f"Failed to save sim_index: {e}")
 
+def reset_simulation_state():
+    """Reset simulation index to 0 (called on pipeline reset)."""
+    global _sim_index, _sim_batch_count
+    _sim_index = 0
+    _sim_batch_count = 0
+    logger.info("[Simulate] Simulation state reset to index 0")
+
 def _load_test_events():
     global _test_events
     path = Path(TEST_EVENTS_PATH)

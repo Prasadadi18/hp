@@ -56,6 +56,20 @@ def load_metrics_from_db():
     """No longer caches in memory. DB is the source of truth."""
     pass
 
+def reset_local_deltas():
+    """Reset all in-memory metric deltas to zero (called on pipeline reset)."""
+    global _pending_updates
+    with _metrics_lock:
+        for k in list(_local_deltas.keys()):
+            if k == "attack_types":
+                _local_deltas[k] = {}
+            elif k == "total_latency_ms":
+                _local_deltas[k] = 0.0
+            else:
+                _local_deltas[k] = 0
+        _pending_updates = 0
+    logger.info("[Metrics] Local in-memory deltas reset to 0")
+
 def flush_metrics_to_db():
     """Flush pending local deltas to Postgres using atomic increments."""
     global _pending_updates

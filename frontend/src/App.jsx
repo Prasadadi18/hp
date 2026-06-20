@@ -64,6 +64,7 @@ export default function App() {
   // Dedup guard: if the same event arrives twice (e.g. a duplicate/leaked WS
   // connection), drop the repeat so the pipeline/log never shows it twice.
   const seenEventIdsRef = useRef(new Set());
+  const resetInProgressRef = useRef(false);
 
   // Expose switchTab globally
   useEffect(() => {
@@ -156,12 +157,12 @@ export default function App() {
 
       // 2. Update Pipeline Stage Latencies
       const stages = prediction.pipeline_stages || [];
-      
+
       // Always update latencies for display
       if (stages && stages.length > 0) {
         setStageLatencies(stages.map(s => parseFloat(s.latency_ms?.toFixed(1) || 0)));
       }
-      
+
       // Show vault terminal for threat events (credential rotation visualization)
       if (shouldAnimate && isThreat) {
         setVaultActive(true);
@@ -197,33 +198,36 @@ export default function App() {
       });
 
       // 4. Update HUD and dashboard stats
-      totalProcessedRef.current += 1;
-      latencySumRef.current += prediction.total_latency_ms || 0;
+      // Guard: if a reset arrived while this event was being processed, discard its counters
+      if (!resetInProgressRef.current) {
+        totalProcessedRef.current += 1;
+        latencySumRef.current += prediction.total_latency_ms || 0;
 
-      if (isThreat) {
-        threatsInterceptedRef.current += 1;
+        if (isThreat) {
+          threatsInterceptedRef.current += 1;
 
-        const aType = prediction.event_summary?.anomaly_type || 'Unknown';
-        attackTypesRef.current = {
-          ...attackTypesRef.current,
-          [aType]: (attackTypesRef.current[aType] || 0) + 1,
-        };
+          const aType = prediction.event_summary?.anomaly_type || 'Unknown';
+          attackTypesRef.current = {
+            ...attackTypesRef.current,
+            [aType]: (attackTypesRef.current[aType] || 0) + 1,
+          };
+        }
+
+        const threatAction = prediction.threat_action || 'ALLOW';
+        if (threatAction === 'ALLOW' || threatAction === 'MONITOR') {
+          allowedProcessedRef.current += 1;
+        } else if (threatAction === 'BLOCK' || threatAction === 'CRITICAL_ALERT') {
+          blockedProcessedRef.current += 1;
+        }
+
+        setEventsProcessed(totalProcessedRef.current);
+        setThreatsIntercepted(threatsInterceptedRef.current);
+        setTotalProcessed(totalProcessedRef.current);
+        setAllowedProcessed(allowedProcessedRef.current);
+        setBlockedProcessed(blockedProcessedRef.current);
+        setAvgLatency(totalProcessedRef.current > 0 ? latencySumRef.current / totalProcessedRef.current : 0);
+        setAttackTypes(attackTypesRef.current);
       }
-
-      const threatAction = prediction.threat_action || 'ALLOW';
-      if (threatAction === 'ALLOW' || threatAction === 'MONITOR') {
-        allowedProcessedRef.current += 1;
-      } else if (threatAction === 'BLOCK' || threatAction === 'CRITICAL_ALERT') {
-        blockedProcessedRef.current += 1;
-      }
-
-      setEventsProcessed(totalProcessedRef.current);
-      setThreatsIntercepted(threatsInterceptedRef.current);
-      setTotalProcessed(totalProcessedRef.current);
-      setAllowedProcessed(allowedProcessedRef.current);
-      setBlockedProcessed(blockedProcessedRef.current);
-      setAvgLatency(totalProcessedRef.current > 0 ? latencySumRef.current / totalProcessedRef.current : 0);
-      setAttackTypes(attackTypesRef.current);
 
       if (prediction.xgb_score !== undefined) {
         setLatestModelScores({
@@ -292,7 +296,6 @@ export default function App() {
             localSimTimer = null;
           }
         };
-
         ws.onmessage = (event) => {
           try {
             const message = JSON.parse(event.data);
@@ -312,9 +315,37 @@ export default function App() {
               eventQueueRef.current.push(message.data);
             } else if (message.type === 'vpn_login_alert') {
               showVpnAlertBanner(message.data);
+            } else if (message.type === 'pipeline_reset') {
+              // Set guard so any in-flight event discards its counter updates
+              resetInProgressRef.current = true;
+
+              // Clear local accumulators
+              totalProcessedRef.current = 0;
+              threatsInterceptedRef.current = 0;
+              allowedProcessedRef.current = 0;
+              blockedProcessedRef.current = 0;
+              latencySumRef.current = 0;
+              attackTypesRef.current = {};
+              eventQueueRef.current = [];
+
+              // Reset the globe's counts
+              setEventsProcessed(0);
+              setThreatsIntercepted(0);
+              setTotalProcessed(0);
+              setAllowedProcessed(0);
+              setBlockedProcessed(0);
+              setAvgLatency(0);
+              setAttackTypes({});
+              setArcs([]);
+              setEventsLog([]);
+              setStageLatencies(Array(10).fill(0));
+
+              // Clear guard after a short delay so next real events are counted
+              setTimeout(() => { resetInProgressRef.current = false; }, 500);
             }
-          } catch (e) {
-            console.error('[HPE] Failed to parse simulation message:', e);
+          }
+          catch (e) {
+            console.error("[HPE] Failed to parse simulation message:", e);
           }
         };
 

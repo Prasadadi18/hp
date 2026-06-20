@@ -535,15 +535,15 @@ async def confirm_reset(request: ResetConfirmRequest, admin=Depends(get_current_
             except Exception as zeek_err:
                 logger.error(f"Failed to truncate Zeek log file: {zeek_err}")
 
-        # 2. Reset in-memory caches
-        from app import threat_engine
+        # 2. Reset in-memory caches (local deltas) AND the Redis live-view
+        #    counters — get_metrics()/get_stats() prefer Redis when it's
+        #    reachable, so skipping this step leaves the dashboard showing
+        #    stale numbers even though Postgres was just zeroed.
+        from app import threat_engine, redis_client
         import app.routes.simulate as simulate_route
-        threat_engine._metrics = {
-            "total_requests": 0, "total_threats": 0, "total_allowed": 0,
-            "total_monitored": 0, "total_blocked": 0, "total_critical": 0,
-            "total_latency_ms": 0.0, "attack_types": {},
-        }
-        threat_engine._pending_updates = 0
+        threat_engine.reset_local_deltas()
+        redis_client.reset_counters()
+        redis_client.reset_admin_stats()
         simulate_route._sim_index = 0
         simulate_route._sim_batch_count = 0
 
@@ -565,8 +565,22 @@ async def confirm_reset(request: ResetConfirmRequest, admin=Depends(get_current_
                 elastic_client._es.indices.delete(index='hpe-threats', ignore_unavailable=True)
                 elastic_client._es.indices.delete(index='zeek-conn-*', ignore_unavailable=True)
                 time.sleep(1)
+                # Recreate with the proper mappings instead of leaving it to
+                # dynamic mapping on the next indexed doc.
+                elastic_client.connect_elasticsearch()
             except Exception as e:
                 logger.error(f"ES index deletion error: {e}")
+        # 5. Reset simulation state
+        try:
+            # If you have a route or helper for this, call it
+            from app.routes.simulate import reset_simulation_state
+            reset_simulation_state()
+            logger.info("[RESET] Simulation state reset")
+        except Exception as e:
+            logger.warning(f"Could not reset simulation state: {e}")
+        # 6. Broadcast reset event to dashboards
+        from app.ws_manager import manager as ws_manager
+        await ws_manager.broadcast({"type": "pipeline_reset"})
 
         logger.warning(f"[ADMIN] Pipeline reset EXECUTED by {admin_username}")
         return {"success": True, "message": "Pipeline reset complete. Audit log and Kafka topics preserved."}
