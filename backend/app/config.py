@@ -56,9 +56,9 @@ VAULT_DB_READONLY_ROLE = "hpe-readonly-role"  # read only,  TTL=30m
 
 # ── Threat thresholds ──────────────────────────────────────────────────────────
 THREAT_LEVELS = {
-    "ALLOW":   0.3,
-    "MONITOR": 0.6,
-    "BLOCK":   0.85,
+    "ALLOW":   0.65,   # raised from 0.3 → events below 65% score = green (ALLOW)
+    "MONITOR": 0.80,   # raised from 0.6 → medium confidence = yellow (MONITOR)
+    "BLOCK":   0.90,   # raised from 0.85 → high confidence only = red (BLOCK/CRITICAL)
 }
 
 # ── Credential rotation settings ───────────────────────────────────────────────

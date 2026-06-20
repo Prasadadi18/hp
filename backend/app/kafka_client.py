@@ -13,6 +13,7 @@ import json
 import logging
 import threading
 import asyncio
+import time
 from typing import Optional, Callable, Dict, Any
 
 # pyrefly: ignore [missing-import]
@@ -473,10 +474,14 @@ def _consumer_loop(process_callback, loop, result_queue):
 
             result = process_callback(raw)
             if result:
-                asyncio.run_coroutine_threadsafe(
+                future = asyncio.run_coroutine_threadsafe(
                     result_queue.put(result),
                     loop
                 )
+                future.result()  # Block until there is room in the queue
+
+            # Slow down consumption for UI demonstration
+            time.sleep(2.0)
 
         except Exception as e:
             logger.error(f"Consumer loop error: {e}")

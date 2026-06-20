@@ -168,7 +168,7 @@ async def lifespan(app: FastAPI):
         logger.error(f"[FAIL] Failed to start Model Drift Monitor service: {e}")
 
     # ── Kafka consumer + broadcast task ───────────────────────────────────────
-    result_queue = asyncio.Queue()
+    result_queue = asyncio.Queue(maxsize=1000)
     broadcast_task = None
 
     if kafka_client.is_connected():
