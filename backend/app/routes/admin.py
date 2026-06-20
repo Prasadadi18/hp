@@ -512,16 +512,62 @@ def confirm_reset(request: ResetConfirmRequest, admin=Depends(get_current_admin)
         db.execute_query("UPDATE hpe_admin_stats SET total_alerts_created=0, total_approved=0, total_rejected=0, total_auto_allowed=0 WHERE id=1")
         db.execute_query("UPDATE hpe_pipeline_metrics SET total_requests=0, total_threats=0, total_allowed=0, total_monitored=0, total_blocked=0, total_critical=0, total_latency_ms=0, attack_types='{}' WHERE id=1")
         db.execute_query("UPDATE hpe_simulation_state SET sim_index=0 WHERE id=1")
-        
-        # 2. Reset in-memory caches
-        from app import threat_engine
+
+        # Reset user login memory to baseline
+        logger.warning("[RESET] Resetting user login memory baseline in PostgreSQL")
+        db.execute_query(
+            "UPDATE hpe_users SET failed_attempts = 0, last_login = NULL, "
+            "last_login_region = NULL, last_login_ip = NULL, last_failed_attempt = NULL"
+        )
+
+        # Clear Redis metric counters, stats, and caches
+        from app import redis_client
+        r = redis_client.get_client()
+        if r:
+            try:
+                for pattern in ["metrics:*", "hpe:stats:*", "user:*", "vpn:*", "hpe:user_history:*"]:
+                    for key in r.scan_iter(pattern):
+                        r.delete(key)
+                logger.warning("[RESET] Redis metrics, stats, user/vpn cache, and history cleared")
+            except Exception as re_err:
+                logger.error(f"Redis flush error: {re_err}")
+
+        # Clear in-memory caches
+        try:
+            from app.routes import auth as auth_route
+            with auth_route._vpn_cache_lock:
+                auth_route._vpn_cache.clear()
+            logger.warning("[RESET] In-memory VPN cache cleared")
+        except Exception as e:
+            logger.error(f"Failed to clear in-memory VPN cache: {e}")
+
+        try:
+            from app import inference
+            inference._user_history.clear()
+            logger.warning("[RESET] In-memory user history cleared")
+        except Exception as e:
+            logger.error(f"Failed to clear in-memory user history: {e}")
+
+        # Truncate zeek-live log file
+        import os
+        log_path = os.environ.get("ZEEK_LOG_PATH", "/app/dataset/zeek-live/conn.log")
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, "w") as f:
+                    f.write("")
+                logger.warning(f"[RESET] Zeek live log file truncated at {log_path}")
+            except Exception as zeek_err:
+                logger.error(f"Failed to truncate Zeek log file: {zeek_err}")
+
+        # 2. Reset in-memory caches (local deltas) AND the Redis live-view
+        #    counters — get_metrics()/get_stats() prefer Redis when it's
+        #    reachable, so skipping this step leaves the dashboard showing
+        #    stale numbers even though Postgres was just zeroed.
+        from app import threat_engine, redis_client
         import app.routes.simulate as simulate_route
-        threat_engine._metrics = {
-            "total_requests": 0, "total_threats": 0, "total_allowed": 0,
-            "total_monitored": 0, "total_blocked": 0, "total_critical": 0,
-            "total_latency_ms": 0.0, "attack_types": {},
-        }
-        threat_engine._pending_updates = 0
+        threat_engine.reset_local_deltas()
+        redis_client.reset_counters()
+        redis_client.reset_admin_stats()
         simulate_route._sim_index = 0
         simulate_route._sim_batch_count = 0
 
@@ -541,9 +587,24 @@ def confirm_reset(request: ResetConfirmRequest, admin=Depends(get_current_admin)
             try:
                 elastic_client._es.indices.delete(index='hpe-audit-logs', ignore_unavailable=True)
                 elastic_client._es.indices.delete(index='hpe-threats', ignore_unavailable=True)
+                elastic_client._es.indices.delete(index='zeek-conn-*', ignore_unavailable=True)
                 time.sleep(1)
+                # Recreate with the proper mappings instead of leaving it to
+                # dynamic mapping on the next indexed doc.
+                elastic_client.connect_elasticsearch()
             except Exception as e:
                 logger.error(f"ES index deletion error: {e}")
+        # 5. Reset simulation state
+        try:
+            # If you have a route or helper for this, call it
+            from app.routes.simulate import reset_simulation_state
+            reset_simulation_state()
+            logger.info("[RESET] Simulation state reset")
+        except Exception as e:
+            logger.warning(f"Could not reset simulation state: {e}")
+        # 6. Broadcast reset event to dashboards
+        from app.ws_manager import manager as ws_manager
+        await ws_manager.broadcast({"type": "pipeline_reset"})
 
         logger.warning(f"[ADMIN] Pipeline reset EXECUTED by {admin_username}")
         return {"success": True, "message": "Pipeline reset complete. Audit log and Kafka topics preserved."}

@@ -1,3 +1,28 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# docker-compose.portal.yml
+#
+# Portal-Only Mode: Full pipeline stack WITHOUT dataset streaming.
+# Only data from the Ngrok public login portal flows through the pipeline.
+#
+# Usage:
+#   docker compose -f docker-compose.portal.yml up -d --build
+#
+# Or use the convenience launcher:
+#   run-portal.bat
+#
+# Data Flow:
+#   Public Login / Simulate (Ngrok / Dashboard)
+#     → Backend → process_event() → WebSocket broadcast
+#     → AI Engine → Full Pipeline → 3D Dashboard
+#
+# Excluded services (not needed in portal mode):
+#   - zeek            (static PCAP processing)
+#   - filebeat        (dataset log shipping)
+#   - es-to-kafka     (ES→Kafka bridge — removed, backend broadcasts directly)
+#   - filebeat-live   (Zeek log watcher — removed, no write_zeek_log calls)
+#   - replay          (dataset conn.log replay)
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
 
   # ── Apache Kafka (KRaft mode — Official Apache Image) ──
@@ -66,67 +91,7 @@ services:
     networks:
       - hpe-network
 
-  # ── Zeek IDS (reads synthetic PCAP from dataset and writes Zeek logs) ──
-  zeek:
-    image: zeek/zeek:5.0.5
-    container_name: hpe-zeek
-    volumes:
-      - ./dataset:/dataset:ro
-      - ./dataset/zeek:/zeek_out
-    command: sh -c "mkdir -p /zeek_out && cd /zeek_out && (zeek -C -r /dataset/conn.pcap || true) && tail -f /dev/null"
-    depends_on:
-      - elasticsearch
-    networks:
-      - hpe-network
-    # Gated: the pcap→Zeek path emits identity-less events that flood the
-    # pipeline with "unknown / 30.3%". Default feed is the Simulate WebSocket
-    # (labelled test_events). Enable with --profile live-replay only if you
-    # specifically want the raw Zeek stream.
-    profiles:
-      - live-replay
-
-  # ── Filebeat (Elastic Beats) ──
-  filebeat:
-    image: docker.elastic.co/beats/filebeat:8.15.0
-    container_name: hpe-filebeat
-    user: root
-    volumes:
-      - ./dataset/zeek:/usr/share/filebeat/zeek:ro
-      - ./beats/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
-    depends_on:
-      - elasticsearch
-      - zeek
-    networks:
-      - hpe-network
-    command: filebeat -e -c /usr/share/filebeat/filebeat.yml --strict.perms=false
-    # Gated with zeek (ships its identity-less output). See note on the zeek
-    # service. Default feed is the Simulate WebSocket.
-    profiles:
-      - live-replay
-
-  # ── Elasticsearch to Kafka bridge ──
-  es-to-kafka:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    container_name: hpe-es-to-kafka
-    working_dir: /repo
-    volumes:
-      - .:/repo:ro
-    environment:
-      - ELASTICSEARCH_URL=http://elasticsearch:9200
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-    networks:
-      - hpe-network
-    command: sh -c "sleep 15 && python scripts/es_to_kafka.py --es-url $${ELASTICSEARCH_URL} --kafka-servers $${KAFKA_BOOTSTRAP_SERVERS} --index zeek-conn-* --topic hpe-raw-events --watch --poll-interval 1"
-    restart: on-failure
-
-  # ── PostgreSQL (Phase 2 — real DB for Vault dynamic secrets engine) ──
+  # ── PostgreSQL ──
   postgres:
     image: postgres:16-alpine
     container_name: hpe-postgres
@@ -193,8 +158,6 @@ services:
     restart: "no"
 
   # ── FastAPI Backend ──
-  # Phase 3: VAULT_TOKEN removed. Backend authenticates via AppRole using
-  # VAULT_ROLE_ID + VAULT_SECRET_ID read from the shared vault_data volume.
   backend:
     build:
       context: .
@@ -208,14 +171,10 @@ services:
       - VAULT_ADDR=http://vault:8200
       - POSTGRES_URL=postgresql://vault-root:vault-root-secret@postgres:5432/hpedb
       - MODEL_PATH=/app/model_output/pipeline_artifacts_v2.joblib
-      - TEST_EVENTS_PATH=/app/model_output/test_events.json
+      - TEST_EVENTS_PATH=/dev/null/no-test-events.json
       - PROFILES_PATH=/app/model_output/user_profiles.json
       - ZEEK_LOG_PATH=/app/dataset/zeek-live/conn.log
-      # VAULT_TOKEN is intentionally removed in Phase 3.
-
-      # The backend reads role_id + secret_id from /vault/data/.approle_credentials
-      # and exchanges them for a short-lived token via AppRole auth.
-
+      - PORTAL_ONLY_MODE=true
       # ── SOAR Email Alerts ───────────────────────────────────────────────────
       - SOAR_EMAIL_ENABLED=true
       - SOAR_SMTP_HOST=smtp.gmail.com
@@ -224,11 +183,6 @@ services:
       - SOAR_SENDER_PASSWORD=nesx dyas qomw zvit
       - SOAR_RECEIVER_EMAIL=adinarayan736@gmail.com
       # ── Credential Rotation Mode ──────────────────────────────────────────
-      # ENABLE_AUTO_USER_ROTATION controls user credential rotation behavior:
-      #   false (demo mode):       User creds rotate ONLY after admin approval
-      #   true (production mode):  User creds rotate IMMEDIATELY on detection
-      # Infrastructure rotation always requires admin approval (both modes).
-      # Default: false (demo mode for easy testing/presentations)
       - ENABLE_AUTO_USER_ROTATION=false
     volumes:
       - ./model_output:/app/model_output:ro
@@ -274,70 +228,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── Live Replay: Streams dataset conn.log as live traffic ──
-  # Reads dataset/zeek/conn.log and writes it line-by-line to
-  # dataset/zeek-live/conn.log at a controlled rate.
-  # Usage: docker compose --profile live-replay up -d
-  replay:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
-    container_name: hpe-replay
-    working_dir: /repo
-    volumes:
-      - .:/repo
-    command: >
-      python scripts/replay_live.py
-        --source /repo/dataset/zeek/conn.log
-        --output /repo/dataset/zeek-live/conn.log
-        --rate ${REPLAY_RATE:-2}
-        --loop
-    depends_on:
-      - elasticsearch
-    networks:
-      - hpe-network
-    profiles:
-      - live-replay
-
-  # ── Filebeat for Live Replay (tail mode → Elasticsearch) ──
-  # Watches dataset/zeek-live/conn.log for new lines and ships to ES.
-  # Pair with the 'replay' service and 'es-to-kafka' to get events into Kafka.
-  # Usage: docker compose --profile live-replay up -d
-  filebeat-live:
-    image: docker.elastic.co/beats/filebeat:8.15.0
-    container_name: hpe-filebeat-live
-    user: root
-    volumes:
-      - ./dataset/zeek-live:/usr/share/filebeat/zeek-live:ro
-      - ./beats/filebeat-live.yml:/usr/share/filebeat/filebeat.yml:ro
-    depends_on:
-      - elasticsearch
-      - replay
-    networks:
-      - hpe-network
-    command: filebeat -e -c /usr/share/filebeat/filebeat.yml --strict.perms=false
-    profiles:
-      - live-replay
-
-  # ── Filebeat Direct-to-Kafka (tail mode → Kafka, bypass ES) ──
-  # Alternative: sends Zeek events straight to Kafka without ES bridge.
-  # Usage: docker compose --profile live-kafka up -d
-  filebeat-kafka:
-    image: docker.elastic.co/beats/filebeat:8.15.0
-    container_name: hpe-filebeat-kafka
-    user: root
-    volumes:
-      - ./dataset/zeek-live:/usr/share/filebeat/zeek-live:ro
-      - ./beats/filebeat-kafka.yml:/usr/share/filebeat/filebeat.yml:ro
-    depends_on:
-      kafka:
-        condition: service_healthy
-    networks:
-      - hpe-network
-    command: filebeat -e -c /usr/share/filebeat/filebeat.yml --strict.perms=false
-    profiles:
-      - live-kafka
-
   # ── Public Login Portal (Served via Nginx) ──
   login-portal:
     image: nginx:alpine
@@ -351,8 +241,6 @@ services:
       - backend
     networks:
       - hpe-network
-    profiles:
-      - live-replay
 
   adminer:
     image: adminer
@@ -366,13 +254,15 @@ services:
       - postgres
     networks:
       - hpe-network
-    profiles:
-      - live-replay
 
   # ── Ngrok Tunnel (Unified Public Access) ──
   ngrok:
     image: ngrok/ngrok:latest
     container_name: hpe-ngrok
+    # restart: on the fast down->up mode switch, the cloud endpoint can still be
+    # marked "online" from the previous session (ERR_NGROK_334). Keep retrying
+    # until ngrok releases the reserved domain, then this comes up on its own.
+    restart: unless-stopped
     volumes:
       - ./ngrok.yml:/etc/ngrok.yml:ro
     command:
@@ -387,8 +277,6 @@ services:
       - backend
     networks:
       - hpe-network
-    profiles:
-      - live-replay
 
 volumes:
   kafka_data:

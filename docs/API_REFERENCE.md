@@ -1,6 +1,9 @@
-# API Reference — HPE Threat Detection Pipeline
+# API Reference — AI-Based Network Monitoring and Anomaly Detection System
 
-> Backend runs at `http://localhost:8000` (Docker) or local.
+> **Backend API:** `http://localhost:8000` (Docker deployment)  
+> **Interactive Documentation:** `http://localhost:8000/docs` (Swagger UI)
+
+This document provides comprehensive API endpoint reference for the AI-Based Network Monitoring and Anomaly Detection System backend service.
 
 ---
 
@@ -243,11 +246,218 @@ Streams test events through the full pipeline in real-time.
 
 ---
 
-## External UIs
+## Authentication Endpoints
 
-| Service | URL | Login |
+### `POST /api/auth/login`
+Authenticate user and obtain session credentials.
+
+**Request Body:**
+```json
+{
+  "username": "alice",
+  "password": "password123"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Login successful",
+  "department": "Engineering",
+  "user_id": "alice",
+  "role": "Developer",
+  "failed_attempts": 0,
+  "last_login": "2026-06-20T10:30:00Z",
+  "last_login_region": "US-East",
+  "credentials_rotated": false
+}
+```
+
+---
+
+### `POST /api/auth/register`
+Submit new user registration request (requires admin approval).
+
+**Request Body:**
+```json
+{
+  "username": "newuser",
+  "department": "Finance"
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Access request submitted. Awaiting admin approval and credential issuance."
+}
+```
+
+---
+
+### `POST /api/auth/simulate`
+Process threat simulation event through the pipeline.
+
+**Request Body:** (NetworkEvent with optional overrides)
+```json
+{
+  "username": "alice",
+  "password": "password123",
+  "login_hour": 3,
+  "ip_region": "EU-Central",
+  "data_downloaded_mb": 500.0,
+  "failed_attempts": 6,
+  "impossible_travel": true,
+  "is_vpn": true
+}
+```
+
+---
+
+## Admin Dashboard Endpoints
+
+All admin endpoints require JWT authentication. Include the token in the `Authorization: Bearer <token>` header.
+
+### `POST /api/admin/login`
+Authenticate admin user and obtain JWT token.
+
+**Request Body:**
+```json
+{
+  "username": "admin",
+  "password": "admin"
+}
+```
+
+**Response:**
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "expires_in": 1800,
+  "username": "admin"
+}
+```
+
+---
+
+### `GET /api/admin/alerts`
+Retrieve threat alerts with optional filtering.
+
+**Query Parameters:**
+- `status` (optional): Filter by status (`pending`, `approved`, `rejected`)
+- `severity` (optional): Filter by severity
+- `limit` (optional): Maximum alerts to return (default: 100)
+
+**Response:**
+```json
+{
+  "total": 42,
+  "pending_count": 5,
+  "alerts": [...]
+}
+```
+
+---
+
+### `GET /api/admin/alerts/{alert_id}`
+Get detailed information for a specific alert.
+
+---
+
+### `POST /api/admin/alerts/{alert_id}/approve`
+Approve credential rotation for a threat alert.
+
+**Request Body:**
+```json
+{
+  "admin_notes": "Confirmed malicious activity from VPN exit node"
+}
+```
+
+---
+
+### `POST /api/admin/alerts/{alert_id}/reject`
+Reject alert as false positive.
+
+---
+
+### `GET /api/admin/stats`
+Retrieve admin dashboard statistics.
+
+---
+
+### `GET /api/admin/audit-log`
+Fetch admin action audit trail (append-only log).
+
+**Query Parameters:**
+- `limit` (optional): Maximum entries to return (default: 50)
+
+---
+
+### `GET /api/admin/registrations`
+List pending user registration requests.
+
+---
+
+### `POST /api/admin/registrations/{username}/approve`
+Approve user registration and provision credentials.
+
+**Request Body:**
+```json
+{
+  "password": "SecurePassword123!"
+}
+```
+
+---
+
+### `POST /api/admin/registrations/{username}/reject`
+Reject and delete pending registration request.
+
+---
+
+### `POST /api/admin/reset/request`
+Request pipeline reset (Step 1: Generate confirmation token).
+
+**Response:**
+```json
+{
+  "confirm_token": "a1b2c3d4...",
+  "expires_in": 60,
+  "message": "Send this token to POST /api/admin/reset/confirm within 60 seconds."
+}
+```
+
+---
+
+### `POST /api/admin/reset/confirm`
+Execute pipeline reset with confirmation token (Step 2).
+
+**Request Body:**
+```json
+{
+  "confirm_token": "a1b2c3d4..."
+}
+```
+
+**Note:** Reset preserves audit log and Kafka topics while wiping all derived state.
+
+---
+
+### `WS /api/admin/ws?token=<jwt_token>`
+WebSocket connection for real-time admin notifications.
+
+---
+
+## External Service UIs
+
+| Service | URL | Authentication |
 |---|---|---|
+| **Dashboard** | `http://localhost:5173` | None required |
+| **Enterprise Portal** | `http://localhost:8080` | User credentials |
 | **Vault UI** | `http://localhost:8200` | Token: `hpe-dev-token` |
-| **Kibana** | `http://localhost:5601` | No auth required |
-| **FastAPI Docs** | `http://localhost:8000/docs` | Swagger UI |
-| **Frontend** | `http://localhost:5173` | No auth required |
+| **Kibana** | `http://localhost:5601` | None required |
+| **Adminer (DB)** | `http://localhost:9090` | postgres/vault-root/vault-root-secret |
+| **Swagger Docs** | `http://localhost:8000/docs` | Interactive API documentation |

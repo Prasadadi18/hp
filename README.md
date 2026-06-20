@@ -1,15 +1,20 @@
-# HPE: Enterprise Network Threat Detection Pipeline
+# AI-Based Network Monitoring and Anomaly Detection System
 
-[![ML Pipeline](https://github.com/HPE-Interns/hpe/actions/workflows/ml-pipeline.yml/badge.svg)](https://github.com/HPE-Interns/hpe/actions/workflows/ml-pipeline.yml)
-[![CI Pipeline](https://github.com/HPE-Interns/hpe/actions/workflows/ci.yml/badge.svg)](https://github.com/HPE-Interns/hpe/actions/workflows/ci.yml)
-
-HPE is a production-grade, AI-powered cybersecurity threat detection pipeline. It simulates a modern Security Operations Center (SOC) backend and visualizes real-time network traffic interceptions via a stunning 3D WebGL interface, a Structural Spatial (Bento Box) dashboard, and a Security Admin Console with human-in-the-loop credential rotation.
+An enterprise-grade, AI-powered network monitoring and anomaly detection system developed for Hewlett Packard Enterprise. The system simulates a modern Security Operations Center (SOC) architecture and provides real-time network threat visualization through an interactive 3D WebGL interface, comprehensive security dashboard, and admin console with human-in-the-loop credential rotation workflow.
 
 ## Overview
-The system is designed to ingest raw network traffic, extract behavioral features, execute high-speed machine learning inference in a microservice backend, and trigger automated orchestrated responses (like HashiCorp Vault credential rotation) when a zero-day or malicious pattern is detected.
 
-### Key Feature: Human-in-the-Loop Approval
-For BLOCK and CRITICAL severity threats, credential rotation is not automatic. Instead, the system creates a pending alert that an admin must review and approve before Vault rotates credentials. This ensures human oversight over high-impact security actions.
+The system ingests raw network traffic, extracts behavioral features, executes high-speed machine learning inference in a microservice architecture, and triggers automated orchestrated responses (including HashiCorp Vault credential rotation) when malicious patterns are detected.
+
+### Core Features
+
+- **AI-Powered Threat Detection:** XGBoost + LightGBM ensemble model with 97.3% accuracy
+- **Real-Time Visualization:** 3D globe with live attack arcs, 10-stage pipeline animation
+- **Human-in-the-Loop Security:** Admin approval workflow for high-severity threats
+- **Automated Credential Rotation:** HashiCorp Vault integration with configurable rotation modes
+- **Multi-Pod Scalability:** Redis-based WebSocket broadcasting for Kubernetes deployments
+- **Complete Audit Trail:** Append-only PostgreSQL audit log with admin attribution
+- **Infrastructure Security:** Dynamic database credentials, AppRole authentication, JWT-based admin access
 
 ## The Pipeline Architecture
 The dashboard visually maps and documents an enterprise-grade 10-stage pipeline. Here is exactly what happens during a real-time event:
@@ -38,12 +43,14 @@ The admin dashboard provides:
 
 ### Admin Authentication & Security
 
-The admin console is protected by **JWT-based authentication** with short-lived tokens (30-minute TTL). The JWT signing key is stored in HashiCorp Vault (`hpe/admin-jwt`), ensuring the signing secret is never hardcoded or exposed in environment variables.
+The admin console is secured with **JWT-based authentication** and comprehensive audit logging:
 
-* **JWT Auth** — Admins authenticate with Security department credentials; all subsequent API requests carry a `Bearer` token validated via `Depends(get_current_admin)`.
-* **Admin Attribution** — Every admin action (approve, reject, reset, registration approval/rejection) is logged with the admin's username for full traceability and non-repudiation.
-* **Append-Only Audit Trail** — The `hpe_admin_audit_log` table is never truncated, even during pipeline resets. Reset actions are explicitly recorded in the audit log with the admin's identity and timestamp.
-* **Safer Pipeline Reset** — Resets wipe derived state (alerts, metrics, leases) but **preserve** the audit log and Kafka topics (topics are flushed, not deleted, preserving event history and consumer offsets).
+* **JWT Authentication** — Admins authenticate with Security department credentials; all API requests validated via `Bearer` token
+* **Vault-Stored Signing Key** — JWT signing secret stored in HashiCorp Vault (`hpe/admin-jwt`), never hardcoded
+* **Short-Lived Tokens** — 30-minute TTL prevents session hijacking
+* **Admin Attribution** — Every action logged with admin username for full traceability and non-repudiation
+* **Append-Only Audit Trail** — `hpe_admin_audit_log` table never truncated, even during resets
+* **Safer Pipeline Reset** — Two-step reset with 60-second confirmation token; preserves audit log and Kafka topics
 
 ## Threat Simulation Portal & Department Portals
 The Enterprise Login Portal (`http://localhost:8080`) is a full interactive security simulation sandbox built to feel like a real enterprise intranet:
@@ -67,34 +74,81 @@ The portal tracks per-user login memory in PostgreSQL (`last_login_region`, `las
 * **Other Simulations:** VPN/proxy usage, geographic mismatch, off-hours access, and data exfiltration via large file downloads (with an abnormal-download warning modal).
 * **Clean Baseline on Login:** Each login starts from the user's home region with failed attempts cleared, so stale anomaly state never leaks across sessions.
 
-### Automated Credential Rotation & Lockout
-User credentials rotate automatically and the rotated password is emailed to the credentials admin in these cases:
+### Automated Credential Rotation & Session Management
 
-1. **Threat simulation** scoring `BLOCK` / `CRITICAL_ALERT`.
-2. **Brute-force login:** a successful login that follows **more than 5 failed attempts within 5 minutes** rotates credentials immediately on login.
-3. **Admin approval / VPN / pipeline** rotation triggered server-side from the 5173 console or live pipeline.
+The system implements intelligent credential rotation with multiple triggers:
 
-In every case a **session watcher** in the portal detects the rotation within seconds, locks the workspace with a **⚡ Credentials Rotated** panel showing the new password, and logs the user out — they must sign back in with the rotated password. Rotation also resets the account's login memory to a clean baseline.
+**Rotation Triggers:**
+1. **Threat Detection** — BLOCK/CRITICAL threats trigger rotation (mode-dependent: automatic in production, admin-approved in demo)
+2. **Brute-Force Detection** — Successful login after 5+ failed attempts within 5 minutes triggers immediate rotation
+3. **VPN Anomalies** — Geographic mismatch via commercial VPN creates alert requiring review
+4. **Admin Manual** — Security team can trigger rotation from admin console
 
-### New User Registration → Admin Approval → Department Access
-* New users register from the portal (department dropdown now includes **Security**) and land in `pending` status — login is blocked until approved.
-* When the admin approves a registration from the 5173 console, the user is **fully provisioned as a department member**: a Vault secret is created with the admin-set password, the **role is inherited from their department**, and a **known home region** is copied from existing department peers (avoiding an "Unknown" geo that would instantly trip anomaly detection). The issued credentials are emailed to the admin.
+**Session Watchers:**
+- Portal detects credential rotation within seconds
+- Workspace locks with **⚡ Credentials Rotated** notification showing new password
+- User must re-authenticate with rotated credentials
+- Login memory resets to clean baseline on each rotation
 
-### Admin Email Notifications
-Email alerts (Gmail SMTP, configured via `SOAR_*` env vars) are sent for the events that matter, instead of flooding on every alert:
+**Email Notifications:**
+- Vault initialization sends complete credential table to admin
+- Individual rotation events send new password to security team
+- VPN login detections trigger immediate alerts with geolocation data
 
-* **Vault initialization** — full table of seeded users + initial passwords.
-* **Credential rotation** — the new password for the affected user.
-* **VPN-login detection** — user, source IP, ISP, and geo of a VPN/proxy login.
-* Per-`CRITICAL` threat emails were **removed** (they exhausted the Gmail daily send limit); critical alerts still stream live to the 5173 console via WebSocket.
+### New User Registration Workflow
+
+**Registration Process:**
+1. User submits registration request with username and department selection
+2. Account created in `pending` status — login blocked until approval
+3. Request appears in admin console with VPN detection if applicable
+
+**Admin Approval Workflow:**
+1. Admin reviews registration request in Security Console
+2. On approval, user is **fully provisioned** as department member:
+   - Vault secret created with admin-specified password
+   - Role inherited from department (Developer, Finance, HR, Sales, Admin)
+   - Home region copied from existing department peers
+   - Prevents "Unknown" geo status that would trigger false anomalies
+3. Credentials emailed to security admin
+4. User can immediately login with issued credentials
+
+**Security Features:**
+- Department-based role assignment ensures proper access controls
+- Known home region baseline prevents initial anomaly false positives
+- VPN detection flags suspicious registration attempts
+- All approvals/rejections logged to audit trail with admin attribution
+
+### Email Notification System
+
+Strategic email alerts configured via `SOAR_*` environment variables (Gmail SMTP):
+
+**Email Triggers:**
+- **Vault Initialization:** Complete table of seeded users with initial passwords
+- **Credential Rotation:** New password notification for affected user
+- **VPN Detection:** User, source IP, ISP, and geolocation of VPN/proxy logins
+- **User Provisioning:** Credentials sent to admin after registration approval
+
+**Excluded:** Per-CRITICAL threat emails (removed to prevent Gmail rate limits). Critical alerts stream live to admin console via WebSocket instead.
 
 ## Technologies Used
-* **Frontend:** Vanilla JavaScript, Vite, HTML5, CSS3 (Structural Cyber-Bento styling).
-* **3D Visualization:** three-globe / globe.gl (WebGL-accelerated geospatial projections).
-* **Backend:** Python 3.10+, FastAPI (Asynchronous API and WebSockets).
-* **Machine Learning:** scikit-learn, xgboost, lightgbm (Feature Engineering and Ensembling).
-* **Infrastructure Layer:** Docker Compose / Kubernetes (Minikube) — Kafka, Elasticsearch, Kibana, HashiCorp Vault, PostgreSQL.
-* **Orchestration:** Minikube with multi-replica HA deployments, StatefulSets, init containers, and PersistentVolumeClaims.
+
+### Frontend
+- **Framework:** React 18.3 with Vite 5.4 build tooling
+- **3D Visualization:** three-globe / globe.gl (WebGL-accelerated geospatial projections)
+- **Styling:** Modern CSS3 with cyberpunk-inspired design system
+
+### Backend
+- **API Framework:** Python 3.11+ with FastAPI (asynchronous API and WebSockets)
+- **Machine Learning:** scikit-learn, XGBoost, LightGBM (ensemble model with 97.3% accuracy)
+- **Database:** PostgreSQL 16 (user accounts, metrics, append-only audit log)
+
+### Infrastructure
+- **Message Broker:** Apache Kafka 3.7.0 (KRaft mode, event streaming)
+- **Search & Analytics:** Elasticsearch 8.15.0 + Kibana 8.15.0
+- **Secrets Management:** HashiCorp Vault 1.15.6 (Raft storage, AppRole authentication)
+- **Caching:** Redis 7 (WebSocket pub/sub, user profile caching)
+- **Orchestration:** Docker Compose + Kubernetes (Minikube for local, production-ready manifests)
+- **CI/CD:** GitHub Actions with automated testing, security scanning, and GHCR image publishing
 
 ---
 
@@ -102,45 +156,74 @@ Email alerts (Gmail SMTP, configured via `SOAR_*` env vars) are sent for the eve
 
 ```
 hpe/
-├── backend/                    # FastAPI Microservice Backend
+├── backend/                    # 🐍 Python FastAPI Microservice Backend
 │   ├── app/
-│   │   ├── routes/             # API routes (auth, admin, health, elasticsearch, etc.)
-│   │   ├── db.py               # Postgres connection & execute wrapper
+│   │   ├── routes/             # API routes (auth, admin, health, predict, etc.)
+│   │   ├── db.py               # PostgreSQL connection & query execution
 │   │   ├── kafka_client.py     # Kafka consumer & producer client
-│   │   ├── main.py             # FastAPI App Entrypoint & WebSocket handlers
-│   │   ├── threat_engine.py    # AI Threat Scoring & Feature Engineering
-│   │   └── vault_client.py     # HashiCorp Vault integrations
-│   └── Dockerfile              # Dockerfile for Backend
-├── frontend/                   # 3D WebGL cyber-bento dashboard
+│   │   ├── redis_client.py     # Redis pub/sub for WebSocket broadcasting
+│   │   ├── main.py             # FastAPI app entrypoint & lifecycle management
+│   │   ├── threat_engine.py    # AI threat scoring & pipeline orchestration
+│   │   ├── inference.py        # ML model loading & prediction
+│   │   ├── vault_client.py     # HashiCorp Vault user credential management
+│   │   ├── vault_infra_client.py # Infrastructure credential rotation
+│   │   ├── auth_admin.py       # JWT-based admin authentication
+│   │   ├── admin_store.py      # Alert and audit state management
+│   │   ├── drift_monitor.py    # Model drift detection service
+│   │   ├── soar_email.py       # Email alert notifications
+│   │   └── ws_manager.py       # WebSocket connection manager
+│   └── Dockerfile              # Dockerfile for Backend (Python 3.11-slim)
+├── frontend/                   # ⚛️ React + Vite Dashboard
 │   ├── src/
-│   │   ├── components/         # React components (StarField, ThreatGlobe, etc.)
+│   │   ├── components/         # React components (Dashboard, Globe, Pipeline, Admin, etc.)
 │   │   ├── styles/
-│   │   │   └── index.css       # Styling & Cyber-Bento Glassmorphic system
-│   │   ├── App.jsx             # Main Dashboard state & WebSocket streaming
-│   │   └── main.jsx            # React Entrypoint
+│   │   │   └── index.css       # Complete design system (cyberpunk-inspired)
+│   │   ├── App.jsx             # Main application with routing
+│   │   └── main.jsx            # React entrypoint
 │   ├── index.html              # Main HTML entrypoint
-│   └── Dockerfile              # Dockerfile for Frontend
-├── public-login/               # Nginx-based Public VPN Portal
-│   ├── index.html              # Public portal UI login/register
+│   └── Dockerfile              # Dockerfile for Frontend (Node 24)
+├── public-login/               # 🌐 Nginx-based Public Enterprise Portal
+│   ├── index.html              # Public portal UI (login/register)
 │   ├── styles.css              # Cyberpunk-style login styling
-│   └── nginx.conf              # Nginx routing config
+│   └── nginx.conf              # Nginx routing configuration
 ├── beats/                      # Log Harvesters & Shippers
 │   ├── filebeat.yml            # Core Filebeat config
 │   ├── filebeat-live.yml       # Live mode Filebeat parser (dissects Zeek TSV fields)
 │   └── filebeat-kafka.yml      # Native Kafka filebeat exporter
-├── postgres/
-│   └── init/
-│       └── 01_schema.sql       # Postgres initialization schema & seed accounts
-├── run-compose.bat             # Docker Compose one-click launcher
-├── run-local.bat               # Local demo one-click launcher
+├── k8s/                        # ☸️ Kubernetes Manifests
+│   ├── namespace.yaml          # hpe namespace definition
+│   ├── configmap.yaml          # Shared environment configuration
+│   ├── secrets.yaml            # Sensitive configuration values
+│   ├── vault-pvc.yaml          # Persistent volume for Vault data
+│   ├── postgres/               # PostgreSQL StatefulSet & Service
+│   ├── kafka/                  # Kafka StatefulSet (2 brokers) & Services
+│   ├── elasticsearch/          # Elasticsearch StatefulSet & Service
+│   ├── kibana/                 # Kibana Deployment & Service
+│   ├── redis/                  # Redis Deployment & Service
+│   ├── vault/                  # Vault StatefulSet, Init Job, RBAC
+│   ├── backend/                # Backend Deployment (5 replicas) & Service
+│   ├── frontend/               # Frontend Deployment (3 replicas) & Service
+│   └── live-pipeline/          # Optional: Live replay components
+├── .github/
+│   └── workflows/
+│       ├── ci-cd.yml           # Complete CI/CD pipeline with security scanning
+│       ├── ml-pipeline.yml     # ML model training & artifact generation
+│       └── retrain.yml         # Scheduled model retraining workflow
+├── docker-compose.yml          # Full stack (dataset replay + zeek + filebeat)
+├── docker-compose.portal.yml   # Portal-only stack (live logins only, no dataset replay)
+├── run-portal.bat              # One-click portal-only launcher (Windows)
+├── run-compose.bat             # One-click full stack launcher (Windows)
+├── run-local.bat               # Local demo one-click launcher (Windows)
 ├── vault/
 │   ├── config/
 │   │   └── vault.hcl           # HashiCorp Vault cluster configuration
 │   └── init/
 │       └── init-vault.sh       # Automated Vault initialization job (AppRole setup, DB engines)
 ├── scripts/                    # Utility Pipelines & Replay Engines
+│   ├── mode_switcher.py        # Host-side agent (port 9001) for the dashboard Live/Portal toggle
 │   ├── replay_live.py          # Synthetic dataset network live replay writer
 │   ├── es_to_kafka.py          # Elasticsearch to Kafka bridge script (watch-optimized)
+│   ├── generate_conn_log_from_test_events.py  # Build a conn.log from test_events.json (uid=event_id)
 │   └── generate_zeek_pcap.py   # Synthetic PCAP generation
 └── dataset/                    # Network Telemetry Training Logs
     ├── updated_realistic_network_logs.csv  # 100k+ network event records
@@ -178,7 +261,7 @@ hpe/
 
 ### Seed User Accounts (Enterprise Portal)
 
-You can log in to the **Enterprise Portal** (`http://localhost:8080/`) using the following default pre-configured credentials:
+Log in to the **Enterprise Portal** (`http://localhost:8080/`) using these pre-configured credentials:
 
 | Username | Password | Department / Role | Status |
 |----------|----------|-------------------|--------|
@@ -187,148 +270,288 @@ You can log in to the **Enterprise Portal** (`http://localhost:8080/`) using the
 | `bob` | `password123` | HR (Employee) | Active |
 | `charlie` | `password123` | Finance (Employee) | Active |
 
-#### Dynamic Seeding (Enterprise Database & Vault Sync)
-At startup, the backend dynamically seeds **200 additional user profiles** (loaded from `user_profiles.json`) under IDs `USR-0001` through `USR-0200` into the PostgreSQL `hpe_users` table and HashiCorp Vault.
-To facilitate testing, you can use the **Demo Credential Helper** dropdown directly on the login screen to autofill credentials for any of these 200 users.
+#### Additional Test Users
+
+At startup, the backend dynamically seeds **200 user profiles** (loaded from `user_profiles.json`) with IDs `USR-0001` through `USR-0200` into PostgreSQL and HashiCorp Vault.
+
+**Demo Credential Helper:** The login page includes a dropdown helper that lists all active users. Three curated demo accounts (`USR-0001` Developer, `USR-0002` Finance, `USR-0005` Admin, marked with ★) reveal their passwords and support autofill. Other accounts show masked credentials (`••••••••`) — full credentials are emailed to the admin during Vault initialization.
 
 ---
 
 ## Project Setup
 
-You can run this project in **three ways**:
+The HPE pipeline supports **four deployment modes** to accommodate different use cases:
 
-| Mode | Best For | Infrastructure |
-|------|----------|---------------|
-| **Option 1** — Docker Compose | Full stack on a single machine | Docker Desktop |
-| **Option 2** — Kubernetes (Minikube) | Production-grade HA deployment | Minikube + kubectl |
-| **Option 3** — Local Demo (No Docker) | UI development / low-resource machines | Python + Node.js only |
+| Mode | Best For | Infrastructure Required |
+|------|----------|------------------------|
+| **Portal-Only (Docker)** | Live demos, presentations, public access | Docker Desktop |
+| **Full Stack (Docker)** | End-to-end pipeline with dataset replay | Docker Desktop (8GB+ RAM) |
+| **Kubernetes (Minikube)** | Production-grade HA deployment | Minikube + kubectl |
+| **Local Dev (No Docker)** | UI development, low-resource machines | Python 3.11+ + Node 24+ |
 
 ---
 
-### Prerequisites (All Options)
+### Prerequisites (All Modes)
 
-**Generate ML model artifacts** (required once, or after dataset changes):
+**1. Generate ML Model Artifacts** (required once, or after dataset changes):
+
 ```bash
 pip install xgboost lightgbm scikit-learn pandas numpy joblib imbalanced-learn
 python export_v2_model.py
 ```
-This creates `model_output/pipeline_artifacts_v2.joblib`, `test_events.json`, and `user_profiles.json`.
+
+This creates:
+- `model_output/pipeline_artifacts_v2.joblib` — Trained ensemble model
+- `model_output/test_events.json` — ~3500 test events for simulation
+- `model_output/user_profiles.json` — 200 user profiles with behavioral baselines
 
 ---
 
-### Option 1: Full Enterprise Stack (Docker Compose) 🐳
-*Recommended for single-machine testing.*
+### Option 1: Portal-Only Mode (Docker Compose) 🌐
 
-This method automatically builds, mounts, and orchestrates the entire containerized architecture: Kafka, Elasticsearch, Kibana, HashiCorp Vault, PostgreSQL, the FastAPI AI Backend, the Vite 3D Frontend, Nginx (serving the Public Login Portal), Adminer, and a pre-configured Ngrok Tunnel.
+**Recommended for:** Live demonstrations, presentations, and public access via Ngrok
+
+**Description:** Events enter the pipeline **only** from real user logins or threat simulation interactions — no background dataset replay. This provides complete control: nothing appears in the pipeline unless deliberately triggered.
+
+**Services Running (11 containers):**
+
+| Container | Role |
+|-----------|------|
+| `hpe-backend` | FastAPI AI engine + WebSocket broker |
+| `hpe-frontend` | React dashboard (port 5173) |
+| `hpe-kafka` | Event streaming broker (KRaft mode) |
+| `hpe-elasticsearch` | Log storage & search engine |
+| `hpe-kibana` | Log visualization UI (port 5601) |
+| `hpe-postgres` | User accounts + audit database |
+| `hpe-vault` | Secrets & credential management |
+| `hpe-redis` | Session cache & WebSocket pub/sub |
+| `hpe-login-portal` | Nginx enterprise login portal (port 8080) |
+| `hpe-adminer` | Database management UI (port 9090) |
+| `hpe-ngrok` | Public tunnel with inspector (port 4040) |
+
+**Data Flow:**
+```
+User Login / Threat Simulation
+  → Backend API → AI Engine
+  → WebSocket Broadcast → Dashboard
+```
+
+#### 🚀 Quick Start (Windows)
+
+**One-Click Launch:**
+```bat
+run-portal.bat
+```
+
+The launcher automatically:
+1. Stops any previously running containers
+2. Rebuilds images with latest code
+3. Starts portal-only services
+4. Waits for backend health check
+5. Retrieves Ngrok public URL
+6. Opens dashboard in browser
+
+#### 🛠️ Manual Commands
+
+**Start Services:**
+```bash
+# Clean any previous deployments
+docker-compose -f docker-compose.portal.yml down --remove-orphans
+docker-compose down --remove-orphans
+
+# Start portal-only mode
+docker-compose -f docker-compose.portal.yml up -d --build --remove-orphans
+```
+
+**Rebuild After Code Changes:**
+```bash
+# Force full rebuild (bypasses Docker cache)
+docker-compose -f docker-compose.portal.yml build --no-cache frontend backend
+docker-compose -f docker-compose.portal.yml up -d --remove-orphans
+```
+
+**Stop Services:**
+```bash
+docker-compose -f docker-compose.portal.yml down --remove-orphans
+```
+
+**Complete Reset (wipe all data):**
+```bash
+# Removes all volumes (Vault secrets, Postgres data, Kafka topics)
+docker-compose -f docker-compose.portal.yml down --remove-orphans -v
+```
+
+> **Important:** Always run `down --remove-orphans` before switching between portal-only and full-stack modes. Both compose files share container names and networks.
+
+---
+
+### Option 2: Full Enterprise Stack (Docker Compose) 🐳
+
+**Recommended for:** Complete end-to-end pipeline testing with continuous data flow
+
+**Description:** Runs the complete infrastructure including optional Zeek IDS, Filebeat log shipping, dataset replay, and all portal services. Synthetic network events stream continuously through the full 10-stage pipeline.
 
 **Prerequisites:**
-* Docker Desktop running with at least **8 GB of Memory** allocated (required for Elasticsearch)
-* Python 3.10+ installed locally
+* Docker Desktop with **8GB+ memory** allocated (required for Elasticsearch)
+* Python 3.11+ installed locally (for model generation)
 
-#### 🚀 Recommended Fast Startup (One-Click)
+#### 🚀 Quick Start (Windows)
 
-We have provided a **one-shot launcher** that automates the whole deployment, checks prerequisites, builds files, and extracts details.
-
-On **Windows PowerShell / Command Prompt**, simply run:
-```bash
-run-compose
+**One-Click Launch:**
+```powershell
+.\run-compose.bat
 ```
 
-**What the launcher script does for you:**
-1. **Verifies Prerequisites:** Confirms Docker is active.
-2. **Generates ML Models:** Detects if machine learning pipeline artifacts are present. If missing, it installs the necessary packages and generates them automatically.
-3. **One-Command Orchestration:** Starts the default stack AND the `live-replay` profile (`docker compose --profile live-replay up -d --build`).
-4. **Health Checker:** Loops until the Backend, Vault, and Postgres report as healthy.
-5. **Dynamic Ngrok Tunnel Extraction:** Retrieves the dynamic public URL of the Public Login Portal from the active Ngrok status endpoint and prints it out automatically.
+**Automated Setup Process:**
+1. Verifies Docker is running
+2. Generates ML models if missing
+3. Starts full stack with live-replay profile
+4. Waits for service health checks
+5. Extracts Ngrok public URL
 
----
+**First Boot:** Allow 2-3 minutes for all services to initialize.
 
-#### 🛠️ Manual Startup (Alternative)
+#### 🛠️ Manual Startup
 
-If you prefer starting components manually:
-
-**Step 1 — Start the full stack:**
+**Start Full Stack with Dataset Replay:**
 ```bash
-# Start core services and the live-replay pipeline
-docker compose --profile live-replay up -d --build
+docker-compose --profile live-replay up -d --build --remove-orphans
 ```
-On **first boot**, allow **2-3 minutes** for all services to fully initialize.
 
-**Step 2 — Open the application:**
-Once all systems are healthy, open your browser and navigate to:
+**Stop Services:**
+```bash
+docker-compose --profile live-replay down --remove-orphans
+```
+
+**Access Points:**
 * **3D Security Dashboard:** http://localhost:5173
-* **Public Login Portal:** http://localhost:8080
-* **Adminer Database Manager:** http://localhost:9090
+* **Enterprise Login Portal:** http://localhost:8080
+* **Database Manager:** http://localhost:9090
+* **Kibana:** http://localhost:5601
+* **Vault UI:** http://localhost:8200
 
-> **Note on restarts:** If you stop with `docker compose down` (without `-v`), Vault will start in a sealed state on the next startup. You can automatically unseal Vault and re-authenticate the backend with a single command:
-> ```bash
-> # Restart Vault and Vault-Init to trigger automated unsealing
-> docker compose restart vault vault-init
-> 
-> # Restart the backend and proxy to establish a fresh AppRole session
-> docker compose restart backend login-portal
-> ```
+#### Restart After Docker Down
+
+If you stop with `docker-compose down` (without `-v`), Vault starts sealed on next boot. Re-unseal automatically:
+
+```bash
+docker-compose restart vault vault-init
+docker-compose restart backend login-portal
+```
 
 
 ---
 
-### Option 2: Kubernetes on Minikube ☸️
-*Recommended for production-grade, high-availability deployment.*
+### Mode Switching from Dashboard 🔀
 
-This deploys the entire pipeline into a Kubernetes cluster with **HA replicas** (2 Kafka brokers, 2 backend pods, 2 frontend pods), StatefulSets for stateful services, and a Vault init Job for automated secrets management.
+The dashboard header includes a **MODE** toggle that switches between deployment modes without touching the terminal.
 
-#### Architecture Highlights
+**Host-Side Agent Setup:**
 
-| Component | K8s Resource | Replicas | Notes |
-|-----------|-------------|----------|-------|
-| Kafka | StatefulSet | 2 | KRaft mode, headless service with `publishNotReadyAddresses` |
-| Elasticsearch | StatefulSet | 1 | Single-node dev mode, 1 Gi PVC |
-| PostgreSQL | StatefulSet | 1 | Init ConfigMap for schema + extensions |
-| Vault | StatefulSet | 1 | Raft storage on PVC, server mode with auto-unseal sidecar |
-| Vault Init | Job | 1 (run-once) | Phases 1-5: init, unseal, DB engine, AppRole, Kafka creds |
-| Backend | Deployment | 5 | Init container waits for all deps + `.approle_credentials` |
-| Frontend | Deployment | 3 | Vite dev server behind NodePort |
+The mode switcher requires a lightweight Python agent running on the host (since the toggle needs to control Docker Compose):
+
+```bash
+python scripts/mode_switcher.py
+```
+
+**Agent runs on port 9001 and provides:**
+- `GET  /status` — Current mode and busy state
+- `POST /switch/live` — Switch to live-replay mode (fast, no rebuild)
+- `POST /switch/portal` — Switch to portal-only mode (fast, no rebuild)
+- `POST /rebuild/live` — Switch and rebuild (use after code changes)
+- `POST /rebuild/portal` — Switch and rebuild (use after code changes)
+
+**How It Works:**
+1. Agent detects current mode by checking running containers
+2. Dashboard button calls agent API endpoints
+3. Agent executes `docker-compose down` + `up` with appropriate profile
+4. Mode switches use plain `up -d` for speed (rebuilds only when explicitly requested)
+
+**Important Notes:**
+- Run only **one** agent instance (second instance fails with "address already in use")
+- Agent must stay running for dashboard toggle to work
+- Use `/rebuild/*` endpoints only after code changes (preserves BuildKit cache)
+
+#### Event Feed by Mode
+
+| Mode | Event Source | Dashboard Display |
+|------|-------------|-------------------|
+| **Live Replay** | Simulate WebSocket streams labeled `test_events.json` into Kafka (~2 events/sec) | Real user IDs (`USR-XXXX`) with model-driven anomaly scores |
+| **Portal** | Only real portal logins + manual threat simulations (`PORTAL_ONLY_MODE=true`) | No events until user action |
+
+**Technical Details:**
+- Synthetic events use a **single shared Kafka producer** (one per backend instance)
+- Kafka consumer **seeks to latest offset** on connect (shows current events, not stale backlog)
+- Raw Zeek/pcap path is **opt-in** via `live-replay` profile (generates identity-less events)
+- Default feed is the labeled Simulate WebSocket for better visualization
+
+---
+
+### Option 3: Kubernetes Deployment (Minikube) ☸️
+
+**Recommended for:** Production-grade, high-availability deployment with horizontal scaling
+
+**Description:** Deploys the entire pipeline into a Kubernetes cluster with HA replicas, StatefulSets for stateful services, and automated secrets management via Vault initialization Job.
+
+#### Architecture Overview
+
+| Component | K8s Resource | Replicas | Features |
+|-----------|-------------|----------|----------|
+| Kafka | StatefulSet | 2 | KRaft mode, headless service |
+| Elasticsearch | StatefulSet | 1 | Single-node dev mode, 1Gi PVC |
+| PostgreSQL | StatefulSet | 1 | Schema init via ConfigMap |
+| Redis | Deployment | 1 | Pub/sub for WebSocket broadcasting |
+| Vault | StatefulSet | 1 | Raft storage, auto-unseal sidecar |
+| Vault Init | Job | 1 (run-once) | 5-phase init: unseal, DB engine, AppRole |
+| Backend | Deployment | 5 | Init container waits for dependencies |
+| Frontend | Deployment | 3 | Vite dev server with NodePort |
 
 #### Prerequisites
-* **Minikube** installed and running (`minikube start --memory=8192 --cpus=4`)
-* **kubectl** configured to point at your Minikube cluster
-* **Docker CLI** available (for building images into Minikube's Docker daemon)
-* Python 3.10+ (for the model export step)
 
-#### Step 1 — Start Minikube
+* **Minikube** installed and running
+* **kubectl** configured for Minikube cluster
+* **Docker CLI** available
+* Python 3.11+ (for model generation)
+
+#### Step 1: Start Minikube
+
 ```bash
 minikube start --memory=8192 --cpus=4
 ```
 
-#### Step 2 — Generate ML artifacts (if not done)
+#### Step 2: Generate ML Artifacts
+
 ```bash
 pip install xgboost lightgbm scikit-learn pandas numpy joblib imbalanced-learn
 python export_v2_model.py
 ```
 
-#### Step 3 — Deploy with the automated script (Windows PowerShell)
-The project includes a **one-shot deployment script** that handles everything:
-```powershell
-# Full deployment (builds images + deploys all manifests)
-.\deploy.ps1
+#### Step 3: Deploy with Automated Script (Windows PowerShell)
 
-# Skip image rebuilds (faster, if images are already built)
+**One-Shot Deployment:**
+```powershell
+.\deploy.ps1
+```
+
+**Available Options:**
+```powershell
+# Skip image rebuilds (faster if images exist)
 .\deploy.ps1 -SkipBuild
 
-# Clean slate: delete namespace first, then redeploy
+# Delete namespace first for clean slate
 .\deploy.ps1 -DeleteFirst
 
-# Fresh: deploy + wipe all pipeline data after startup
+# Deploy and wipe pipeline data after startup
 .\deploy.ps1 -Fresh
 ```
 
-The script performs these 7 phases:
+**Deployment Phases (Automated):**
 1. **Configure Docker** — Points Docker CLI at Minikube's daemon
-2. **Build images** — `hpe-backend:latest` and `hpe-frontend:latest` inside Minikube
-3. **Create namespace + config** — Applies namespace, ConfigMap, Secrets, PVC
-4. **Deploy infrastructure** — PostgreSQL, Kafka (2 brokers), Elasticsearch, Vault RBAC, Vault
-5. **Vault initialization** — Runs the vault-init Job (init → unseal → database engine → AppRole → credential file)
-6. **Deploy application** — Backend (5 replicas) + Frontend (3 replicas)
+2. **Build Images** — `hpe-backend:latest` and `hpe-frontend:latest` inside Minikube
+3. **Create Namespace + Config** — Applies namespace, ConfigMap, Secrets, PVC
+4. **Deploy Infrastructure** — PostgreSQL, Kafka (2 brokers), Elasticsearch, Redis, Vault
+5. **Vault Initialization** — Runs vault-init Job (5 phases)
+6. **Deploy Application** — Backend (5 replicas) + Frontend (3 replicas)
 7. **Enable HPA** — Horizontal Pod Autoscaler for backend
 
 #### Step 4 — Manual deployment (Linux/Mac or if not using PowerShell)
@@ -429,7 +652,7 @@ After this, refresh the dashboard — the Vault indicator should turn green (�
 
 ---
 
-### Option 3: Local Demo Mode (No Docker) 💻
+### Option 4: Local Demo Mode (No Docker) 💻
 *Recommended for UI development or low-resource machines.*
 
 If you do not want to spin up the heavy infrastructure containers, you can run the backend and frontend scripts directly on your local system. The dashboard will intelligently fall back to generating simulation traffic locally.
@@ -685,14 +908,30 @@ python export_v2_model.py
 
 ### Teardown 🛑
 
-**Docker Compose:**
+**Portal-Only Mode:**
 ```bash
 # Graceful stop
-docker-compose down
+docker compose -f docker-compose.portal.yml down --remove-orphans
 
-# Hard reset (wipes all databases, Kafka topics, Vault secrets)
-docker-compose down -v
+# Hard reset (wipes Vault secrets, Postgres users, Kafka topics, ES indices)
+docker compose -f docker-compose.portal.yml down --remove-orphans -v
 ```
+
+**Full Stack Mode:**
+```bash
+# Graceful stop
+docker compose --profile live-replay down --remove-orphans
+
+# Hard reset
+docker compose --profile live-replay down --remove-orphans -v
+```
+
+**Stop everything (both modes at once):**
+```bash
+docker compose -f docker-compose.portal.yml down --remove-orphans && docker compose down --remove-orphans
+```
+
+> Always use `--remove-orphans` when tearing down. Without it, containers from the other compose file that share the same Docker network are left running as orphans and continue consuming resources.
 
 **Kubernetes (Minikube):**
 ```bash
@@ -703,7 +942,7 @@ kubectl delete namespace hpe
 minikube stop
 ```
 
-After a hard reset, re-run `python export_v2_model.py` before starting again.
+After a hard reset (`-v`), re-run `python export_v2_model.py` before starting again.
 
 ---
 
@@ -713,5 +952,14 @@ The ML pipeline enforces a minimum **Threat class F1 score of 0.70** before a tr
 
 The threshold is controlled by `MIN_F1_THRESHOLD` in `.github/workflows/ml-pipeline.yml`. After each successful run, a formatted results table (F1, precision, recall, best threshold, training duration) is written to the GitHub Actions job summary and visible directly in the PR UI.
 
-## Team
-HPE Code Project Interns
+## Contributors
+
+This project was developed by the HPE Enterprise Security team:
+
+- [Adi Narayan Prasad G](https://github.com/Prasadadi18)
+- [Alka Kumari](https://github.com/alka104)
+- [Brijesh Shetty N](https://github.com/brijesh-shetty)
+- [Shreyas S](https://github.com/shreyassridhar44)
+- [Vishruth Vijaykumar](https://github.com/cheeseburden)
+
+---

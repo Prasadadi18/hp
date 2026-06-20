@@ -1,5 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
+const formatIpShort = (ip) => {
+  if (!ip) return '--';
+  // Abbreviate IPv6 to first two groups + ellipsis so it fits compact card rows
+  if (ip.includes(':') && ip.length > 15) {
+    const parts = ip.split(':');
+    return `${parts[0]}:${parts[1]}:…`;
+  }
+  return ip;
+};
+
 export default function AdminConsole({
   active,
   refreshTrigger,
@@ -651,6 +661,34 @@ export default function AdminConsole({
               </div>
             ) : (
               replayedAlerts.map(alert => renderAlertCard(alert, selectedAlertId, selectAlert))
+                return (
+                  <div
+                    key={alert.alert_id}
+                    className={`admin-alert-card ${severityClass} ${statusClass} ${isSelected ? 'selected' : ''}`}
+                    onClick={() => selectAlert(alert.alert_id)}
+                  >
+                    <div className="admin-alert-card-header">
+                      <span className={`admin-severity-badge ${severityClass}`}>
+                        {isCritical ? '🔴 CRITICAL' : isBlock ? '🟠 BLOCK' : '🟡 MONITOR'}
+                      </span>
+                      {sourceBadgeHtml}
+                      <span className={`admin-alert-status ${statusClass}`}>
+                        {alert.status.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="admin-alert-card-body">
+                      <div className="admin-alert-user">{alert.user_id || 'unknown'}</div>
+                      <div className="admin-alert-meta">
+                        <span>Score: <strong>{scorePercent}%</strong></span>
+                        <span title={alert.event_data?.source_ip || ''}>IP: {formatIpShort(alert.event_data?.source_ip)}</span>
+                        <span>{timeStr}</span>
+                      </div>
+                      <div className="admin-alert-type">{alert.event_data?.anomaly_type || 'Unknown'}</div>
+                    </div>
+                    <div className="admin-alert-id">{alert.alert_id}</div>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>

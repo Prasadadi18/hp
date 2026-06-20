@@ -161,6 +161,50 @@ def get_counters() -> dict:
     except Exception as exc:
         logger.debug(f"[Redis] get_counters failed: {exc}")
         return {}
+def reset_counters() -> bool:
+    """
+    Hard-reset all shared pipeline metric counters and the attack_types hash.
+    Must be called on pipeline reset — otherwise get_metrics() keeps serving
+    stale numbers from Redis even after Postgres has been zeroed, since
+    Redis is checked first and was never touched by the old reset code.
+    """
+    r = get_client()
+    if r is None:
+        return False
+    try:
+        pipe = r.pipeline(transaction=False)
+        for field in METRIC_KEYS:
+            pipe.set(_rkey(field), 0)
+        pipe.delete(ATTACK_TYPES_KEY)
+        pipe.execute()
+        logger.info("[Redis] Pipeline metric counters reset to 0")
+        return True
+    except Exception as exc:
+        logger.warning(f"[Redis] reset_counters failed: {exc}")
+        return False
+
+
+def reset_admin_stats() -> bool:
+    """
+    Hard-reset all admin alert stat counters to 0 (real SET, not SETNX).
+    init_admin_stats_from_db() uses SETNX on purpose (so a second pod
+    starting doesn't clobber live counters) — but that means it can never
+    be used to clear stale values after a reset. This is the explicit
+    clear path admin_store.get_stats() needs.
+    """
+    r = get_client()
+    if r is None:
+        return False
+    try:
+        pipe = r.pipeline(transaction=False)
+        for field in ADMIN_STAT_KEYS:
+            pipe.set(_admin_key(field), 0)
+        pipe.execute()
+        logger.info("[Redis] Admin alert stat counters reset to 0")
+        return True
+    except Exception as exc:
+        logger.warning(f"[Redis] reset_admin_stats failed: {exc}")
+        return False
 
 
 def is_available() -> bool:
@@ -254,3 +298,4 @@ def init_admin_stats_from_db(db_stats: dict) -> bool:
     except Exception as exc:
         logger.warning(f"[Redis] init_admin_stats_from_db failed: {exc}")
         return False
+

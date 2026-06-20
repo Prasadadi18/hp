@@ -14,7 +14,7 @@ from pathlib import Path
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.config import TEST_EVENTS_PATH
+from app.config import TEST_EVENTS_PATH, PORTAL_ONLY_MODE
 from app.schemas import NetworkEvent
 from app.threat_engine import process_event
 from app import kafka_client
@@ -51,6 +51,13 @@ def _save_sim_index():
         except Exception as e:
             logger.error(f"Failed to save sim_index: {e}")
 
+def reset_simulation_state():
+    """Reset simulation index to 0 (called on pipeline reset)."""
+    global _sim_index, _sim_batch_count
+    _sim_index = 0
+    _sim_batch_count = 0
+    logger.info("[Simulate] Simulation state reset to index 0")
+
 def _load_test_events():
     global _test_events
     path = Path(TEST_EVENTS_PATH)
@@ -67,53 +74,127 @@ def _load_test_events():
         logger.error(f"Failed to load test events: {e}")
         _test_events = []
 
+# ── Single shared producer ────────────────────────────────────────────────────
+# There is exactly ONE producer task for the whole backend, regardless of how
+# many dashboards/tabs are connected. Each /ws/simulate connection used to run
+# its OWN producer loop, so every browser refresh spawned another producer (the
+# old one only died on its next heartbeat send) and the event rate compounded
+# (~+60 events/refresh). Now connections only *receive* ws_manager broadcasts;
+# this task is the sole producer and runs only while ≥1 dashboard is connected.
+_producer_task = None
+_producer_start_lock = asyncio.Lock()
+
+
+async def _ensure_producer_started():
+    """Start the shared producer if it isn't already running."""
+    global _producer_task
+    async with _producer_start_lock:
+        if _producer_task is None or _producer_task.done():
+            _producer_task = asyncio.create_task(_producer_loop())
+            logger.info("Started shared simulation producer")
+
+
+async def _producer_loop():
+    """The single source of synthetic events. Streams labelled test_events into
+    Kafka (or processes locally + broadcasts when Kafka is down). Stops itself
+    once no dashboards remain connected."""
+    global _sim_index
+    if _test_events is None:
+        _load_test_events()
+    _load_sim_index()
+    total = len(_test_events)
+    if total == 0:
+        return
+
+    while ws_manager.active_count > 0:
+        try:
+            # Optional: pause while an external Zeek live-replay is actively
+            # writing (off by default — the labelled stream is what shows real
+            # users/scores). Enable with SUPPRESS_SIM_DURING_REPLAY=true.
+            if os.environ.get("SUPPRESS_SIM_DURING_REPLAY", "").lower() == "true":
+                log_path = os.environ.get("ZEEK_LOG_PATH", "/app/dataset/zeek-live/conn.log")
+                if os.path.exists(log_path):
+                    try:
+                        if time.time() - os.path.getmtime(log_path) < 10:
+                            await asyncio.sleep(2.0)
+                            continue
+                    except Exception:
+                        pass
+
+            raw_event = _test_events[_sim_index % total]
+
+            if kafka_client.is_connected():
+                kafka_client.produce_raw_event({
+                    "event_id": str(uuid.uuid4())[:12],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    **raw_event,
+                })
+                kafka_client.flush()
+            else:
+                # Kafka down: run the pipeline inline and broadcast to all clients.
+                event = NetworkEvent(**{k: v for k, v in raw_event.items()
+                                        if k in NetworkEvent.model_fields})
+                result = process_event(event)
+                await ws_manager.broadcast({
+                    "type": "pipeline_result",
+                    "data": {"event": raw_event, "prediction": result.model_dump()},
+                })
+
+            _sim_index += 1
+            _save_sim_index()
+            if _sim_index > 0 and _sim_index % total == 0:
+                logger.info(f"Simulation completed cycle {_sim_index // total}, looping...")
+
+        except Exception as e:
+            logger.error(f"Simulation producer error: {e}")
+
+        # ~2 events/sec
+        await asyncio.sleep(0.5)
+
+    logger.info("No dashboards connected — shared simulation producer stopped")
+
+
 @router.websocket("/ws/simulate")
 async def simulate_stream(websocket: WebSocket):
     """
-    WebSocket endpoint that sequentially streams the test events.
-    Resumes from the last position if the frontend reconnects.
-    Loops continuously through the dataset.
+    WebSocket endpoint for the dashboard. It only RECEIVES events (via
+    ws_manager broadcasts from the Kafka consumer or the shared producer);
+    it does not produce. The shared producer is started on first connection.
     """
     global _sim_index
     await websocket.accept()
 
     if _test_events is None:
         _load_test_events()
-
     _load_sim_index()
 
     total = len(_test_events)
-    if total == 0:
-        await websocket.send_json({
-            "type": "error",
-            "data": {"message": "No test events loaded"},
-        })
-        return
 
-    # Determine server location
-    server_info = {"lat": 12.97, "lng": 77.59, "city": "Bangalore"}
-
-    # Send server info first
+    # Send server info + where the simulation currently is.
     await websocket.send_json({
         "type": "server_info",
-        "data": server_info,
+        "data": {"lat": 12.97, "lng": 77.59, "city": "Bangalore"},
     })
-
-    # Tell the frontend where we're resuming from
     await websocket.send_json({
         "type": "simulation_status",
         "data": {
             "resuming_from": _sim_index,
             "total_events": total,
-            "message": f"Resuming simulation from event {_sim_index}/{total}"
+            "message": f"Resuming simulation from event {_sim_index}/{total}",
         },
     })
 
-    # Register this WebSocket to receive broadcast results
+    # Register to receive broadcasts (Kafka-consumer results + producer output).
     ws_manager.add(websocket)
 
+    # Start the single shared producer if we have a dataset to stream. In
+    # portal-only mode (total == 0) there's no synthetic dataset — the
+    # connection still stays open to receive REAL portal/login events.
+    if total > 0 and not PORTAL_ONLY_MODE:
+        await _ensure_producer_started()
+
+    # This connection never produces; just stay registered until it disconnects.
     try:
-        # Loop continuously through events
         while True:
             raw_event = _test_events[_sim_index % total]
 
@@ -159,12 +240,13 @@ async def simulate_stream(websocket: WebSocket):
             delay = random.uniform(2.0, 5.0)
             await asyncio.sleep(delay)
 
+            await websocket.receive_text()
     except WebSocketDisconnect:
         ws_manager.remove(websocket)
-        logger.info(f"WebSocket client disconnected. Simulation paused at event {_sim_index}")
+        logger.info(f"Simulation client disconnected (position {_sim_index})")
     except Exception as e:
         ws_manager.remove(websocket)
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"Simulate WS error: {e}")
 
 @router.get("/api/sample-events")
 async def get_sample_events():
