@@ -23,31 +23,31 @@ class TestDetermineAction:
     def test_low_score_allows(self):
         assert determine_action(0.0) == ThreatAction.ALLOW
         assert determine_action(0.1) == ThreatAction.ALLOW
-        assert determine_action(0.29) == ThreatAction.ALLOW
+        assert determine_action(0.64) == ThreatAction.ALLOW
 
     def test_medium_score_monitors(self):
-        assert determine_action(0.3) == ThreatAction.MONITOR
-        assert determine_action(0.45) == ThreatAction.MONITOR
-        assert determine_action(0.59) == ThreatAction.MONITOR
+        assert determine_action(0.65) == ThreatAction.MONITOR
+        assert determine_action(0.70) == ThreatAction.MONITOR
+        assert determine_action(0.79) == ThreatAction.MONITOR
 
     def test_high_score_blocks(self):
-        assert determine_action(0.6) == ThreatAction.BLOCK
-        assert determine_action(0.7) == ThreatAction.BLOCK
-        assert determine_action(0.84) == ThreatAction.BLOCK
+        assert determine_action(0.80) == ThreatAction.BLOCK
+        assert determine_action(0.85) == ThreatAction.BLOCK
+        assert determine_action(0.89) == ThreatAction.BLOCK
 
     def test_critical_score_alerts(self):
-        assert determine_action(0.85) == ThreatAction.CRITICAL_ALERT
+        assert determine_action(0.90) == ThreatAction.CRITICAL_ALERT
         assert determine_action(0.95) == ThreatAction.CRITICAL_ALERT
         assert determine_action(1.0) == ThreatAction.CRITICAL_ALERT
 
     def test_boundary_allow_to_monitor(self):
-        assert determine_action(0.3) == ThreatAction.MONITOR
+        assert determine_action(0.65) == ThreatAction.MONITOR
 
     def test_boundary_monitor_to_block(self):
-        assert determine_action(0.6) == ThreatAction.BLOCK
+        assert determine_action(0.80) == ThreatAction.BLOCK
 
     def test_boundary_block_to_critical(self):
-        assert determine_action(0.85) == ThreatAction.CRITICAL_ALERT
+        assert determine_action(0.90) == ThreatAction.CRITICAL_ALERT
 
 
 class TestDetermineAffectedService:
@@ -79,14 +79,14 @@ class TestThreatLevelCoverage:
     """Verify all threat levels are reachable and monotonic."""
 
     def test_all_actions_reachable(self):
-        mapping = {0.0: ThreatAction.ALLOW, 0.4: ThreatAction.MONITOR, 0.7: ThreatAction.BLOCK, 0.9: ThreatAction.CRITICAL_ALERT}
+        mapping = {0.0: ThreatAction.ALLOW, 0.70: ThreatAction.MONITOR, 0.85: ThreatAction.BLOCK, 0.95: ThreatAction.CRITICAL_ALERT}
         for score, expected in mapping.items():
             assert determine_action(score) == expected
 
     def test_monotonic_severity(self):
         order = [ThreatAction.ALLOW, ThreatAction.MONITOR, ThreatAction.BLOCK, ThreatAction.CRITICAL_ALERT]
         prev = 0
-        for score in [0.0, 0.1, 0.3, 0.5, 0.6, 0.7, 0.85, 0.9, 1.0]:
+        for score in [0.0, 0.1, 0.64, 0.65, 0.75, 0.80, 0.89, 0.90, 1.0]:
             curr = order.index(determine_action(score))
             assert curr >= prev
             prev = curr

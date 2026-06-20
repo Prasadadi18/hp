@@ -7,7 +7,7 @@ def simulate_vpn_login():
     
     payload = {
         "username": "alice",
-        "password": "password123", # Password doesn't matter for simulation endpoint if we bypass or use mock, but let's use the real hash if needed. Actually the simulation endpoint checks it, so we'll use a valid demo user password. Wait, simulation endpoint checks password hash. We'll use a fake one and if it fails, it will still log the attempt.
+        "password": "password123",  # simulation endpoint — password checked against hash
         "login_hour": 3,
         "ip_region": "Asia-Pacific",
         "data_downloaded_mb": 500,
@@ -18,7 +18,7 @@ def simulate_vpn_login():
     
     headers = {
         "Content-Type": "application/json",
-        "X-Forwarded-For": "185.15.2.1" # VPN IP
+        "X-Forwarded-For": "185.15.2.1"  # VPN IP
     }
     
     try:
