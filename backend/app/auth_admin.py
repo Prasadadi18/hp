@@ -4,6 +4,7 @@ auth_admin.py — Admin authentication, JWT handling, and reset confirmation tok
 
 import datetime
 import logging
+import os
 import secrets
 import time
 from typing import Dict, Optional
@@ -27,8 +28,17 @@ _jwt_algorithm: str = "HS256"
 security = HTTPBearer(auto_error=False)
 
 def load_jwt_secret() -> None:
-    """Read signing key from Vault KV at secret/data/hpe/admin-jwt."""
+    """Read signing key from Vault KV at secret/data/hpe/admin-jwt or env var."""
     global _jwt_secret, _jwt_algorithm
+    
+    # Check environment variable first (ensures stability across replicas)
+    env_secret = os.getenv("ADMIN_JWT_SECRET")
+    if env_secret:
+        _jwt_secret = env_secret
+        _jwt_algorithm = "HS256"
+        logger.info("Loaded JWT signing secret from environment variable (ADMIN_JWT_SECRET).")
+        return
+
     try:
         if vault_client._client and vault_client.is_connected():
             logger.info("Reading JWT secret from Vault KV...")
