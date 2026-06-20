@@ -288,6 +288,68 @@ body {
   color: var(--text-secondary);
 }
 
+/* ── Mode switch (Header) ─────────────────────────────────────────────── */
+.mode-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+}
+
+.mode-switch-label {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-secondary);
+  opacity: 0.7;
+}
+
+.mode-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border, #2a2f3a);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.mode-btn:hover:not(:disabled) {
+  border-color: var(--cyan, #22d3ee);
+  color: var(--cyan, #22d3ee);
+}
+
+.mode-btn.active {
+  background: var(--cyan, #22d3ee);
+  border-color: var(--cyan, #22d3ee);
+  color: #0b0e14;
+  font-weight: 600;
+  cursor: default;
+}
+
+.mode-btn:disabled { opacity: 0.9; cursor: default; }
+
+.mode-pill {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--panel-border, #2a2f3a);
+}
+
+.mode-pill.switching {
+  color: #fbbf24;
+  border-color: #fbbf24;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.mode-pill.offline {
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+@keyframes pulse { 50% { opacity: 0.45; } }
+
 .status-dot {
   width: 8px;
   height: 8px;
@@ -747,7 +809,7 @@ body {
 }
 
 .event-user { color: var(--text-primary); min-width: 120px; }
-.event-ip { color: var(--cyan-dim); min-width: 100px; }
+.event-ip { color: var(--cyan-dim); min-width: 80px; max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .event-process { color: var(--text-secondary); }
 .event-score { color: var(--amber); min-width: 60px; text-align: right; }
 .event-time { color: var(--text-muted); min-width: 80px; text-align: right; }
@@ -1854,6 +1916,9 @@ body {
 .admin-fact-val {
   color: var(--text-primary);
   font-weight: 600;
+  word-break: break-all;
+  max-width: 60%;
+  text-align: right;
 }
 
 .admin-fact-val.danger { color: var(--magenta); font-weight: 700; }

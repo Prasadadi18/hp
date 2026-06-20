@@ -68,6 +68,12 @@ THREAT_LEVELS = {
 # Default: False for demo/testing convenience. Set to True in production deployments.
 ENABLE_AUTO_USER_ROTATION = os.getenv("ENABLE_AUTO_USER_ROTATION", "false").lower() in ("true", "1", "yes")
 
+# ── Portal-Only Mode ──────────────────────────────────────────────────────────
+# When true, the backend skips writing Zeek TSV logs (no Filebeat/Kafka replay)
+# and keeps the simulation WebSocket alive for portal-broadcast events only.
+# Set to true in docker-compose.portal.yml; defaults to false for full-stack mode.
+PORTAL_ONLY_MODE = os.getenv("PORTAL_ONLY_MODE", "false").lower() in ("true", "1", "yes")
+
 # ── Server info ────────────────────────────────────────────────────────────────
 SERVER_LOCATION = {"lat": 12.97, "lng": 77.59, "city": "Bangalore, India"}
 APP_NAME = "HPE"

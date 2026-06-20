@@ -61,6 +61,9 @@ export default function App() {
   // Queues
   const eventQueueRef = useRef([]);
   const processingRef = useRef(false);
+  // Dedup guard: if the same event arrives twice (e.g. a duplicate/leaked WS
+  // connection), drop the repeat so the pipeline/log never shows it twice.
+  const seenEventIdsRef = useRef(new Set());
   const resetInProgressRef = useRef(false);
 
   // Expose switchTab globally
@@ -160,63 +163,31 @@ export default function App() {
         setStageLatencies(stages.map(s => parseFloat(s.latency_ms?.toFixed(1) || 0)));
       }
 
-      // Only run the old animation system for live portal events
-      if (shouldAnimate) {
-        // Set threat flow state FIRST before animation starts
-        setIsThreatFlow(isThreat);
+      // Show vault terminal for threat events (credential rotation visualization)
+      if (shouldAnimate && isThreat) {
+        setVaultActive(true);
+        setVaultLines([]);
 
-        // Clean stages and active connector
-        setActiveStage(-1);
-        setActiveConnector(-1);
+        const lines = [
+          { text: '> Initializing Vault connection via API...', delay: 200, class: '' },
+          { text: '[OK] Vault authenticated. Protocol: TLS 1.3', delay: 150, class: 'success' },
+          { text: `> Analyzing threat vector. Score: ${(prediction.threat_score * 100).toFixed(1)}%`, delay: 250, class: 'warning' },
+          { text: '> Revoking compromised service tokens...', delay: 300, class: '' },
+          { text: '[OK] Tokens revoked successfully.', delay: 100, class: 'success' },
+          { text: '> Generating secure DB credentials (AES-256)...', delay: 350, class: '' },
+          { text: '[OK] db_password updated.', delay: 100, class: 'success' },
+          { text: '> Rotating API keys for Microservices...', delay: 250, class: '' },
+          { text: '[OK] api_gateway, service_mesh credentials synced.', delay: 100, class: 'success' },
+          { text: '> SECURE POSTURE RESTORED.', delay: 400, class: 'success' }
+        ];
 
-        // Small delay to ensure state is set
-        await sleep(50);
-
-        for (let i = 0; i < 10; i++) {
+        for (const line of lines) {
           if (!isMounted) return;
-          setActiveStage(i);
-
-          // Vault specific visualization on Stage 6
-          if (i === 6 && isThreat) {
-            setVaultActive(true);
-            setVaultLines([]);
-
-            const lines = [
-              { text: '> Initializing Vault connection via API...', delay: 400, class: '' },
-              { text: '[OK] Vault authenticated. Protocol: TLS 1.3', delay: 300, class: 'success' },
-              { text: `> Analyzing threat vector. Score: ${(prediction.threat_score * 100).toFixed(1)}%`, delay: 500, class: 'warning' },
-              { text: '> Revoking compromised service tokens...', delay: 600, class: '' },
-              { text: '[OK] Tokens revoked successfully.', delay: 200, class: 'success' },
-              { text: '> Generating secure DB credentials (AES-256)...', delay: 700, class: '' },
-              { text: '[OK] db_password updated.', delay: 200, class: 'success' },
-              { text: '> Rotating API keys for Microservices...', delay: 500, class: '' },
-              { text: '[OK] api_gateway, service_mesh credentials synced.', delay: 200, class: 'success' },
-              { text: '> SECURE POSTURE RESTORED.', delay: 800, class: 'success' }
-            ];
-
-            for (const line of lines) {
-              if (!isMounted) return;
-              setVaultLines(prev => [...prev, line]);
-              await sleep(line.delay);
-            }
-            await sleep(1500);
-            setVaultActive(false);
-          }
-
-          if (i < 9) {
-            setActiveConnector(i);
-            await sleep(300);
-          }
-          await sleep(150);
+          setVaultLines(prev => [...prev, line]);
+          await sleep(line.delay);
         }
-
-        // Reset animation states after completion
-        await sleep(800);
-        setActiveStage(-1);
-        setActiveConnector(-1);
-        setIsThreatFlow(false);
-      } else {
-        await sleep(500);
+        await sleep(600);
+        setVaultActive(false);
       }
 
       // 3. Show Temporary Result Banner
@@ -267,7 +238,7 @@ export default function App() {
         });
       }
 
-      // 5. Append to Pipeline event log
+      // 5. Append to Pipeline event log (all events including ALLOW)
       setEventsLog(prev => {
         const next = [prediction, ...prev];
         return next.length > 50 ? next.slice(0, 50) : next;
@@ -329,6 +300,18 @@ export default function App() {
           try {
             const message = JSON.parse(event.data);
             if (message.type === 'pipeline_result') {
+              // Drop duplicate deliveries of the same event (e.g. a second/leaked
+              // WS connection) so it is never rendered or logged twice.
+              const eid = message.data?.prediction?.event_id;
+              if (eid) {
+                if (seenEventIdsRef.current.has(eid)) return;
+                seenEventIdsRef.current.add(eid);
+                if (seenEventIdsRef.current.size > 300) {
+                  seenEventIdsRef.current = new Set(
+                    Array.from(seenEventIdsRef.current).slice(-150)
+                  );
+                }
+              }
               eventQueueRef.current.push(message.data);
             } else if (message.type === 'vpn_login_alert') {
               showVpnAlertBanner(message.data);

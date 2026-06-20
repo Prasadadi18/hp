@@ -488,7 +488,53 @@ async def confirm_reset(request: ResetConfirmRequest, admin=Depends(get_current_
         db.execute_query("UPDATE hpe_admin_stats SET total_alerts_created=0, total_approved=0, total_rejected=0, total_auto_allowed=0 WHERE id=1")
         db.execute_query("UPDATE hpe_pipeline_metrics SET total_requests=0, total_threats=0, total_allowed=0, total_monitored=0, total_blocked=0, total_critical=0, total_latency_ms=0, attack_types='{}' WHERE id=1")
         db.execute_query("UPDATE hpe_simulation_state SET sim_index=0 WHERE id=1")
-        
+
+        # Reset user login memory to baseline
+        logger.warning("[RESET] Resetting user login memory baseline in PostgreSQL")
+        db.execute_query(
+            "UPDATE hpe_users SET failed_attempts = 0, last_login = NULL, "
+            "last_login_region = NULL, last_login_ip = NULL, last_failed_attempt = NULL"
+        )
+
+        # Clear Redis metric counters, stats, and caches
+        from app import redis_client
+        r = redis_client.get_client()
+        if r:
+            try:
+                for pattern in ["metrics:*", "hpe:stats:*", "user:*", "vpn:*", "hpe:user_history:*"]:
+                    for key in r.scan_iter(pattern):
+                        r.delete(key)
+                logger.warning("[RESET] Redis metrics, stats, user/vpn cache, and history cleared")
+            except Exception as re_err:
+                logger.error(f"Redis flush error: {re_err}")
+
+        # Clear in-memory caches
+        try:
+            from app.routes import auth as auth_route
+            with auth_route._vpn_cache_lock:
+                auth_route._vpn_cache.clear()
+            logger.warning("[RESET] In-memory VPN cache cleared")
+        except Exception as e:
+            logger.error(f"Failed to clear in-memory VPN cache: {e}")
+
+        try:
+            from app import inference
+            inference._user_history.clear()
+            logger.warning("[RESET] In-memory user history cleared")
+        except Exception as e:
+            logger.error(f"Failed to clear in-memory user history: {e}")
+
+        # Truncate zeek-live log file
+        import os
+        log_path = os.environ.get("ZEEK_LOG_PATH", "/app/dataset/zeek-live/conn.log")
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, "w") as f:
+                    f.write("")
+                logger.warning(f"[RESET] Zeek live log file truncated at {log_path}")
+            except Exception as zeek_err:
+                logger.error(f"Failed to truncate Zeek log file: {zeek_err}")
+
         # 2. Reset in-memory caches (local deltas) AND the Redis live-view
         #    counters — get_metrics()/get_stats() prefer Redis when it's
         #    reachable, so skipping this step leaves the dashboard showing
@@ -517,6 +563,7 @@ async def confirm_reset(request: ResetConfirmRequest, admin=Depends(get_current_
             try:
                 elastic_client._es.indices.delete(index='hpe-audit-logs', ignore_unavailable=True)
                 elastic_client._es.indices.delete(index='hpe-threats', ignore_unavailable=True)
+                elastic_client._es.indices.delete(index='zeek-conn-*', ignore_unavailable=True)
                 time.sleep(1)
                 # Recreate with the proper mappings instead of leaving it to
                 # dynamic mapping on the next indexed doc.

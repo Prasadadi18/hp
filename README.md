@@ -131,16 +131,21 @@ hpe/
 ├── postgres/
 │   └── init/
 │       └── 01_schema.sql       # Postgres initialization schema & seed accounts
-├── run-compose.bat             # Docker Compose one-click launcher
-├── run-local.bat               # Local demo one-click launcher
+├── docker-compose.yml          # Full stack (dataset replay + zeek + filebeat)
+├── docker-compose.portal.yml   # Portal-only stack (live logins only, no dataset replay)
+├── run-portal.bat              # One-click portal-only launcher (Windows)
+├── run-compose.bat             # One-click full stack launcher (Windows)
+├── run-local.bat               # Local demo one-click launcher (Windows)
 ├── vault/
 │   ├── config/
 │   │   └── vault.hcl           # HashiCorp Vault cluster configuration
 │   └── init/
 │       └── init-vault.sh       # Automated Vault initialization job (AppRole setup, DB engines)
 ├── scripts/                    # Utility Pipelines & Replay Engines
+│   ├── mode_switcher.py        # Host-side agent (port 9001) for the dashboard Live/Portal toggle
 │   ├── replay_live.py          # Synthetic dataset network live replay writer
 │   ├── es_to_kafka.py          # Elasticsearch to Kafka bridge script (watch-optimized)
+│   ├── generate_conn_log_from_test_events.py  # Build a conn.log from test_events.json (uid=event_id)
 │   └── generate_zeek_pcap.py   # Synthetic PCAP generation
 └── dataset/                    # Network Telemetry Training Logs
     ├── updated_realistic_network_logs.csv  # 100k+ network event records
@@ -195,13 +200,14 @@ To facilitate testing, you can use the **Demo Credential Helper** dropdown direc
 
 ## Project Setup
 
-You can run this project in **three ways**:
+You can run this project in **four ways**:
 
 | Mode | Best For | Infrastructure |
 |------|----------|---------------|
-| **Option 1** — Docker Compose | Full stack on a single machine | Docker Desktop |
-| **Option 2** — Kubernetes (Minikube) | Production-grade HA deployment | Minikube + kubectl |
-| **Option 3** — Local Demo (No Docker) | UI development / low-resource machines | Python + Node.js only |
+| **Option 1** — Portal-Only (Docker) | Live demos, presentations, public Ngrok access | Docker Desktop |
+| **Option 2** — Full Stack (Docker) | End-to-end dataset replay + full pipeline | Docker Desktop |
+| **Option 3** — Kubernetes (Minikube) | Production-grade HA deployment | Minikube + kubectl |
+| **Option 4** — Local Demo (No Docker) | UI development / low-resource machines | Python + Node.js only |
 
 ---
 
@@ -216,10 +222,73 @@ This creates `model_output/pipeline_artifacts_v2.joblib`, `test_events.json`, an
 
 ---
 
-### Option 1: Full Enterprise Stack (Docker Compose) 🐳
-*Recommended for single-machine testing.*
+### Option 1: Portal-Only Mode (Docker Compose) 🌐
+*Recommended for live demos, presentations, and public Ngrok access.*
 
-This method automatically builds, mounts, and orchestrates the entire containerized architecture: Kafka, Elasticsearch, Kibana, HashiCorp Vault, PostgreSQL, the FastAPI AI Backend, the Vite 3D Frontend, Nginx (serving the Public Login Portal), Adminer, and a pre-configured Ngrok Tunnel.
+Events enter the pipeline **only** from real user logins or the Threat Simulation button — no synthetic dataset replay runs in the background. This gives you a fully controlled environment: nothing appears in the pipeline unless you or a user deliberately triggers it.
+
+**What runs (11 containers):**
+
+| Container | Role |
+|-----------|------|
+| `hpe-backend` | FastAPI AI engine + WebSocket broker |
+| `hpe-frontend` | Vite 3D dashboard (port 5173) |
+| `hpe-kafka` | Event streaming broker |
+| `hpe-elasticsearch` | Log storage & search |
+| `hpe-kibana` | Log visualization (port 5601) |
+| `hpe-postgres` | User + audit database |
+| `hpe-vault` | Secrets & credential rotation |
+| `hpe-redis` | Session / rate-limit cache |
+| `hpe-login-portal` | Nginx public login portal (port 8080) |
+| `hpe-adminer` | Database GUI (port 9090) |
+| `hpe-ngrok` | Public tunnel (port 4040 inspector) |
+
+**Data flow:**
+```
+Public Login / Simulate button
+  → Backend → process_event() → AI Engine
+  → WebSocket broadcast → 3D Dashboard
+```
+
+#### 🚀 One-Click Launch (Windows)
+```bat
+run-portal.bat
+```
+The launcher: stops any previously running stack (both compose files), rebuilds images, starts portal-only containers, waits for the backend to be healthy, retrieves the Ngrok public URL, and opens the dashboard.
+
+#### 🛠️ Manual Commands
+
+**Start:**
+```bash
+docker compose -f docker-compose.portal.yml down --remove-orphans   # clean slate
+docker compose down --remove-orphans                                 # stop full-mode leftovers
+docker compose -f docker-compose.portal.yml up -d --build --remove-orphans
+```
+
+**After changing frontend or backend source code** (Docker build cache can serve stale images — force a full rebuild):
+```bash
+docker compose -f docker-compose.portal.yml build --no-cache frontend backend
+docker compose -f docker-compose.portal.yml up -d --remove-orphans
+```
+
+**Stop:**
+```bash
+docker compose -f docker-compose.portal.yml down --remove-orphans
+```
+
+**Stop and wipe all data** (Vault secrets, Postgres users, Kafka topics):
+```bash
+docker compose -f docker-compose.portal.yml down --remove-orphans -v
+```
+
+> **Important — switching between modes:** always run `down --remove-orphans` before switching from portal-only to full mode (or vice versa). The two compose files share the same Docker network and container names; running both simultaneously causes orphaned containers that keep running even after a `down`.
+
+---
+
+### Option 2: Full Enterprise Stack (Docker Compose) 🐳
+*Recommended for end-to-end dataset pipeline testing.*
+
+Runs the complete stack including Zeek IDS, Filebeat log shipping, dataset replay, Elasticsearch, Kafka, and all portal services. Synthetic network events stream continuously through the full 10-stage pipeline without any user interaction.
 
 **Prerequisites:**
 * Docker Desktop running with at least **8 GB of Memory** allocated (required for Elasticsearch)
@@ -227,52 +296,93 @@ This method automatically builds, mounts, and orchestrates the entire containeri
 
 #### 🚀 Recommended Fast Startup (One-Click)
 
-We have provided a **one-shot launcher** that automates the whole deployment, checks prerequisites, builds files, and extracts details.
-
-On **Windows PowerShell / Command Prompt**, simply run:
+On **Windows PowerShell / Command Prompt**, run:
 ```bash
 run-compose
 ```
 
-**What the launcher script does for you:**
+**What the launcher does:**
 1. **Verifies Prerequisites:** Confirms Docker is active.
-2. **Generates ML Models:** Detects if machine learning pipeline artifacts are present. If missing, it installs the necessary packages and generates them automatically.
-3. **One-Command Orchestration:** Starts the default stack AND the `live-replay` profile (`docker compose --profile live-replay up -d --build`).
-4. **Health Checker:** Loops until the Backend, Vault, and Postgres report as healthy.
-5. **Dynamic Ngrok Tunnel Extraction:** Retrieves the dynamic public URL of the Public Login Portal from the active Ngrok status endpoint and prints it out automatically.
+2. **Generates ML Models:** If artifacts are missing, installs packages and generates them.
+3. **One-Command Orchestration:** Starts the default stack + `live-replay` profile (`docker compose --profile live-replay up -d --build`).
+4. **Health Checker:** Waits until Backend, Vault, and Postgres are healthy.
+5. **Ngrok URL Extraction:** Retrieves the public tunnel URL automatically.
 
 ---
 
-#### 🛠️ Manual Startup (Alternative)
+#### 🛠️ Manual Startup
 
-If you prefer starting components manually:
-
-**Step 1 — Start the full stack:**
+**Start full stack with dataset replay:**
 ```bash
-# Start core services and the live-replay pipeline
-docker compose --profile live-replay up -d --build
+docker compose --profile live-replay up -d --build --remove-orphans
 ```
-On **first boot**, allow **2-3 minutes** for all services to fully initialize.
+On **first boot**, allow **2-3 minutes** for all services to initialize.
 
-**Step 2 — Open the application:**
-Once all systems are healthy, open your browser and navigate to:
+**Stop:**
+```bash
+docker compose --profile live-replay down --remove-orphans
+```
+
+**Open the application:**
 * **3D Security Dashboard:** http://localhost:5173
 * **Public Login Portal:** http://localhost:8080
 * **Adminer Database Manager:** http://localhost:9090
 
-> **Note on restarts:** If you stop with `docker compose down` (without `-v`), Vault will start in a sealed state on the next startup. You can automatically unseal Vault and re-authenticate the backend with a single command:
+> **Note on restarts:** If you stop with `docker compose down` (without `-v`), Vault starts sealed on the next boot. Re-unseal automatically:
 > ```bash
-> # Restart Vault and Vault-Init to trigger automated unsealing
 > docker compose restart vault vault-init
-> 
-> # Restart the backend and proxy to establish a fresh AppRole session
 > docker compose restart backend login-portal
 > ```
 
 
 ---
 
-### Option 2: Kubernetes on Minikube ☸️
+### Switching Modes Live from the Dashboard (Mode Switcher) 🔀
+
+The dashboard header has a **MODE** toggle (**Live Replay** / **Portal**) that switches the
+whole stack between the two compose files without touching a terminal. Because a switch tears
+the stack **down** and brings the other **up** — including the backend and frontend — the
+switch logic cannot live inside the stack. It runs as a small **host-side agent**,
+`scripts/mode_switcher.py`, on port **9001**.
+
+**Run the agent on the host (leave it running; the dashboard button calls it):**
+```bash
+python scripts/mode_switcher.py
+```
+
+* `GET  /status`        → `{"mode": "live-replay" | "portal" | "stopped", "busy": bool}`
+* `POST /switch/live`   → `down` portal, `up` the live stack (fast, no rebuild)
+* `POST /switch/portal` → `down` live, `up` the portal stack (fast, no rebuild)
+* `POST /rebuild/live` · `/rebuild/portal` → same, but with `--build` (use after code changes)
+
+Notes:
+* A switch uses a plain `up -d` (no `--build`) so it's a fast restart — rebuilding on every
+  switch corrupted the BuildKit snapshot cache. Use the `/rebuild/*` routes only when you've
+  changed code.
+* Mode is detected from running containers via `hpe-es-to-kafka` (live-only).
+* Run **one** instance — a second copy fails to bind port 9001 (`address already in use`).
+
+#### What each mode feeds the dashboard
+
+| Mode | Event feed | Dashboard shows |
+|------|-----------|-----------------|
+| **Live Replay** | The **Simulate WebSocket** streams the labelled `test_events.json` into Kafka (~2/sec) | Real user IDs (`USR-XXXX`) + varied, model-driven anomaly scores |
+| **Portal** | Quiet — only real portal logins / Threat-Simulation clicks (`PORTAL_ONLY_MODE=true`, no synthetic stream) | Nothing until a user acts |
+
+The synthetic events that drive Live Replay are produced by a **single shared producer**
+(one per backend, regardless of how many dashboards/tabs are open), and the Kafka consumer
+**seeks to the latest offset** on connect so a restart/switch shows current events instead of
+replaying stale backlog.
+
+> **Raw Zeek/pcap path is opt-in.** The `zeek`, `filebeat`, `replay`, and `filebeat-live`
+> services are gated behind the `live-replay` compose **profile** and are **off by default**.
+> Their Zeek-generated events have no user identity (they render as `unknown / connection`
+> with a constant score), so the labelled Simulate stream is the default Live-Replay feed.
+> Enable the raw stream explicitly with `docker compose --profile live-replay up -d`.
+
+---
+
+### Option 3: Kubernetes on Minikube ☸️
 *Recommended for production-grade, high-availability deployment.*
 
 This deploys the entire pipeline into a Kubernetes cluster with **HA replicas** (2 Kafka brokers, 2 backend pods, 2 frontend pods), StatefulSets for stateful services, and a Vault init Job for automated secrets management.
@@ -429,7 +539,7 @@ After this, refresh the dashboard — the Vault indicator should turn green (�
 
 ---
 
-### Option 3: Local Demo Mode (No Docker) 💻
+### Option 4: Local Demo Mode (No Docker) 💻
 *Recommended for UI development or low-resource machines.*
 
 If you do not want to spin up the heavy infrastructure containers, you can run the backend and frontend scripts directly on your local system. The dashboard will intelligently fall back to generating simulation traffic locally.
@@ -685,14 +795,30 @@ python export_v2_model.py
 
 ### Teardown 🛑
 
-**Docker Compose:**
+**Portal-Only Mode:**
 ```bash
 # Graceful stop
-docker-compose down
+docker compose -f docker-compose.portal.yml down --remove-orphans
 
-# Hard reset (wipes all databases, Kafka topics, Vault secrets)
-docker-compose down -v
+# Hard reset (wipes Vault secrets, Postgres users, Kafka topics, ES indices)
+docker compose -f docker-compose.portal.yml down --remove-orphans -v
 ```
+
+**Full Stack Mode:**
+```bash
+# Graceful stop
+docker compose --profile live-replay down --remove-orphans
+
+# Hard reset
+docker compose --profile live-replay down --remove-orphans -v
+```
+
+**Stop everything (both modes at once):**
+```bash
+docker compose -f docker-compose.portal.yml down --remove-orphans && docker compose down --remove-orphans
+```
+
+> Always use `--remove-orphans` when tearing down. Without it, containers from the other compose file that share the same Docker network are left running as orphans and continue consuming resources.
 
 **Kubernetes (Minikube):**
 ```bash
@@ -703,7 +829,7 @@ kubectl delete namespace hpe
 minikube stop
 ```
 
-After a hard reset, re-run `python export_v2_model.py` before starting again.
+After a hard reset (`-v`), re-run `python export_v2_model.py` before starting again.
 
 ---
 

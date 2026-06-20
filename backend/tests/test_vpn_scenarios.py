@@ -21,6 +21,8 @@ class TestVpnThreatScenarios:
         """
         VPN Scenario 1: User logs in from a Commercial VPN located in Frankfurt.
         Apparent region is Frankfurt (EU-Central) but typical home profile is US-East.
+        VPN + geo_mismatch is treated as BLOCK — creates an admin alert and requires
+        approval for rotation, but does not escalate to CRITICAL (reserved for impossible travel).
         Expects:
           - Threat action = BLOCK
           - Threat reasons include: 'Geographic Mismatch via Commercial VPN Exit Node (Germany)'
@@ -41,7 +43,7 @@ class TestVpnThreatScenarios:
             is_vpn=True,
             event_source="live_portal"
         )
-        
+
         result = process_event(event)
         assert result.is_threat is True
         assert result.threat_action == ThreatAction.BLOCK

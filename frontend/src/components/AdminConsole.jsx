@@ -1,5 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 
+const formatIpShort = (ip) => {
+  if (!ip) return '--';
+  // Abbreviate IPv6 to first two groups + ellipsis so it fits compact card rows
+  if (ip.includes(':') && ip.length > 15) {
+    const parts = ip.split(':');
+    return `${parts[0]}:${parts[1]}:…`;
+  }
+  return ip;
+};
+
 export default function AdminConsole({
   active,
   refreshTrigger,
@@ -588,7 +598,7 @@ export default function AdminConsole({
                       <div className="admin-alert-user">{alert.user_id || 'unknown'}</div>
                       <div className="admin-alert-meta">
                         <span>Score: <strong>{scorePercent}%</strong></span>
-                        <span>IP: {alert.event_data?.source_ip || '--'}</span>
+                        <span title={alert.event_data?.source_ip || ''}>IP: {formatIpShort(alert.event_data?.source_ip)}</span>
                         <span>{timeStr}</span>
                       </div>
                       <div className="admin-alert-type">{alert.event_data?.anomaly_type || 'Unknown'}</div>
