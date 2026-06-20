@@ -115,24 +115,6 @@ async def simulate_stream(websocket: WebSocket):
     try:
         # Loop continuously through events
         while True:
-            # Check if background live replay is active by inspecting the log file mtime.
-            # If the file exists and was updated in the last 10 seconds, we let it handle the event stream
-            # and pause this synthetic simulation loop.
-            live_replay_active = False
-            log_path = os.environ.get("ZEEK_LOG_PATH", "/app/dataset/zeek-live/conn.log")
-            if os.path.exists(log_path):
-                try:
-                    mtime = os.path.getmtime(log_path)
-                    if time.time() - mtime < 10:
-                        live_replay_active = True
-                except Exception:
-                    pass
-
-            if live_replay_active:
-                # Just keep connection open and wait, events are produced by live-replay
-                await asyncio.sleep(2.0)
-                continue
-
             raw_event = _test_events[_sim_index % total]
 
             try:
