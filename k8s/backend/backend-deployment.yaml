@@ -17,6 +17,16 @@ spec:
       labels:
         app: backend
     spec:
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - vault
+              topologyKey: "kubernetes.io/hostname"
       # Wait for all infra services before starting
       initContainers:
         - name: wait-for-deps
@@ -80,13 +90,23 @@ spec:
                 secretKeyRef:
                   name: hpe-secrets
                   key: VAULT_TOKEN
+            - name: SOAR_SENDER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: hpe-secrets
+                  key: SOAR_SENDER_PASSWORD
+            - name: ADMIN_JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: hpe-secrets
+                  key: ADMIN_JWT_SECRET
           ports:
             - containerPort: 8000
               name: http
           resources:
             requests:
               memory: "512Mi"
-              cpu: "250m"
+              cpu: "100m"
             limits:
               memory: "1Gi"
               cpu: "1000m"
