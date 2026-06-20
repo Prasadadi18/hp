@@ -136,23 +136,22 @@ async def simulate_stream(websocket: WebSocket):
     try:
         # Loop continuously through events
         while True:
-            # Check if background live replay is active by inspecting the log file mtime.
-            # If the file exists and was updated in the last 10 seconds, we let it handle the event stream
-            # and pause this synthetic simulation loop.
-            live_replay_active = False
-            log_path = os.environ.get("ZEEK_LOG_PATH", "/app/dataset/zeek-live/conn.log")
-            if os.path.exists(log_path):
-                try:
-                    mtime = os.path.getmtime(log_path)
-                    if time.time() - mtime < 10:
-                        live_replay_active = True
-                except Exception:
-                    pass
-
-            if live_replay_active:
-                # Just keep connection open and wait, events are produced by live-replay
-                await asyncio.sleep(2.0)
-                continue
+            # The Zeek live-replay feed (dataset/zeek/conn.log) carries NO user
+            # identity — its events render as "unknown / connection" with the same
+            # low score. The labelled test_events.json stream is what shows real
+            # users and varied anomaly scores. We therefore keep streaming the
+            # labelled events even while live-replay is running, so the dashboard
+            # shows meaningful data (set SUPPRESS_SIM_DURING_REPLAY=true to revert
+            # to the old pause-during-replay behaviour).
+            if os.environ.get("SUPPRESS_SIM_DURING_REPLAY", "").lower() == "true":
+                log_path = os.environ.get("ZEEK_LOG_PATH", "/app/dataset/zeek-live/conn.log")
+                if os.path.exists(log_path):
+                    try:
+                        if time.time() - os.path.getmtime(log_path) < 10:
+                            await asyncio.sleep(2.0)
+                            continue
+                    except Exception:
+                        pass
 
             raw_event = _test_events[_sim_index % total]
 
@@ -194,9 +193,15 @@ async def simulate_stream(websocket: WebSocket):
             if _sim_index > 0 and _sim_index % total == 0:
                 logger.info(f"Simulation completed cycle {_sim_index // total}, looping...")
 
-            # Random delay between events (2.0s - 5.0s)
-            delay = random.uniform(2.0, 5.0)
-            await asyncio.sleep(delay)
+            # Heartbeat — detect a disconnected client. The Kafka path never writes
+            # to this WebSocket, so without this probe the loop would run forever
+            # after the browser closes (a zombie producer flooding Kafka). Placed
+            # OUTSIDE the inner try so WebSocketDisconnect propagates to the outer
+            # handler and cleanly ends the loop.
+            await websocket.send_json({"type": "heartbeat"})
+
+            # Fixed delay between events (0.5s -> ~2 events/sec)
+            await asyncio.sleep(0.5)
 
     except WebSocketDisconnect:
         ws_manager.remove(websocket)
