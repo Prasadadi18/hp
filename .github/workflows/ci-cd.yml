@@ -16,8 +16,7 @@ on:
 
 env:
   PYTHON_VERSION: "3.11"
-  NODE_VERSION: "24"
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "20"
   ADMIN_SECRET: "test-secret"
   REGISTRY: ghcr.io
 
