@@ -55,7 +55,7 @@ class AdminLoginRequest(BaseModel):
 
 
 @router.post("/login")
-async def admin_login(request: AdminLoginRequest):
+def admin_login(request: AdminLoginRequest):
     """Exchange admin credentials for a JWT."""
     from app import db
     pass_hash = hashlib.sha256(request.password.encode('utf-8')).hexdigest()
@@ -75,7 +75,7 @@ async def admin_login(request: AdminLoginRequest):
 
 
 @router.get("/alerts")
-async def get_alerts(status: str = None, severity: str = None, limit: int = 100, admin=Depends(get_current_admin)):
+def get_alerts(status: str = None, severity: str = None, limit: int = 100, admin=Depends(get_current_admin)):
     alerts = admin_store.get_all_alerts(status=status, severity=severity, limit=limit)
     pending_count = sum(1 for a in admin_store.get_all_alerts(status="pending"))
     return {
@@ -86,7 +86,7 @@ async def get_alerts(status: str = None, severity: str = None, limit: int = 100,
 
 
 @router.get("/alerts/{alert_id}")
-async def get_alert_detail(alert_id: str, admin=Depends(get_current_admin)):
+def get_alert_detail(alert_id: str, admin=Depends(get_current_admin)):
     alert = admin_store.get_alert(alert_id)
     if not alert:
         return {"error": f"Alert {alert_id} not found"}
@@ -94,7 +94,7 @@ async def get_alert_detail(alert_id: str, admin=Depends(get_current_admin)):
 
 
 @router.post("/alerts/{alert_id}/approve", response_model=ApprovalResponse)
-async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(get_current_admin)):
+def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(get_current_admin)):
     """
     Approve credential rotation for threat alerts.
 
@@ -225,22 +225,28 @@ async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(g
     admin_store.set_rotation_result(alert_id, combined_result)
 
     # ── Broadcast to admin WebSocket clients ──────────────────────────────────
-    await admin_manager.broadcast({
-        "type": "alert_resolved",
-        "data": {
-            "alert_id":              alert_id,
-            "action":                "approved",
-            "user_id":               alert["user_id"],
-            "threat_action":         alert["threat_action"],
-            "user_rotation_success": (
-                True if ENABLE_AUTO_USER_ROTATION
-                else user_rotation_result.get("success", False)
-            ),
-            "user_rotation_automatic": ENABLE_AUTO_USER_ROTATION,
-            "infra_rotation":        infra_rotation_result,
-            "affected_service":      affected_service,
-        },
-    })
+    # Note: Using run_until_complete or similar is not needed if this is synchronous
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(admin_manager.broadcast({
+            "type": "alert_resolved",
+            "data": {
+                "alert_id":              alert_id,
+                "action":                "approved",
+                "user_id":               alert["user_id"],
+                "threat_action":         alert["threat_action"],
+                "user_rotation_success": (
+                    True if ENABLE_AUTO_USER_ROTATION
+                    else user_rotation_result.get("success", False)
+                ),
+                "user_rotation_automatic": ENABLE_AUTO_USER_ROTATION,
+                "infra_rotation":        infra_rotation_result,
+                "affected_service":      affected_service,
+            },
+        }))
+    except Exception as e:
+        logger.error(f"Failed to broadcast websocket update: {e}")
 
     # ── Build response message ────────────────────────────────────────────────
     if ENABLE_AUTO_USER_ROTATION:
@@ -287,7 +293,7 @@ async def approve_alert(alert_id: str, request: ApprovalRequest, admin=Depends(g
 
 
 @router.post("/alerts/{alert_id}/reject", response_model=ApprovalResponse)
-async def reject_alert(alert_id: str, request: ApprovalRequest, admin=Depends(get_current_admin)):
+def reject_alert(alert_id: str, request: ApprovalRequest, admin=Depends(get_current_admin)):
     alert = admin_store.reject_alert(alert_id, admin_notes=request.admin_notes)
     if not alert:
         return ApprovalResponse(
@@ -300,14 +306,19 @@ async def reject_alert(alert_id: str, request: ApprovalRequest, admin=Depends(ge
     admin_username = admin.get('sub', 'unknown')
     logger.info(f"[ADMIN] Alert {alert_id} rejected by {admin_username}")
 
-    await admin_manager.broadcast({
-        "type": "alert_resolved",
-        "data": {
-            "alert_id": alert_id,
-            "action":   "rejected",
-            "user_id":  alert["user_id"],
-        },
-    })
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(admin_manager.broadcast({
+            "type": "alert_resolved",
+            "data": {
+                "alert_id": alert_id,
+                "action":   "rejected",
+                "user_id":  alert["user_id"],
+            },
+        }))
+    except Exception as e:
+        logger.error(f"Failed to broadcast websocket update: {e}")
 
     try:
         elastic_client.update_threat_resolution(alert["event_id"], "rejected")
@@ -323,7 +334,7 @@ async def reject_alert(alert_id: str, request: ApprovalRequest, admin=Depends(ge
 
 
 @router.get("/stats")
-async def get_admin_stats(admin=Depends(get_current_admin)):
+def get_admin_stats(admin=Depends(get_current_admin)):
     stats = admin_store.get_stats()
     stats["infra_rotation_count"] = vault_infra_client.get_infra_rotation_count()
     stats["active_infra_leases"] = vault_infra_client.get_active_leases()
@@ -331,13 +342,13 @@ async def get_admin_stats(admin=Depends(get_current_admin)):
 
 
 @router.get("/audit-log")
-async def get_audit_log(limit: int = 50, admin=Depends(get_current_admin)):
+def get_audit_log(limit: int = 50, admin=Depends(get_current_admin)):
     log = admin_store.get_audit_log(limit=limit)
     return {"total": len(log), "entries": log}
 
 
 @router.get("/infra-leases")
-async def get_infra_leases(admin=Depends(get_current_admin)):
+def get_infra_leases(admin=Depends(get_current_admin)):
     """
     Get all active infrastructure leases including Kafka Vault KV status.
     Phase 5: Kafka section shows vault_managed_credential metadata.
@@ -350,7 +361,7 @@ async def get_infra_leases(admin=Depends(get_current_admin)):
 
 
 @router.get("/registrations")
-async def get_registrations(admin=Depends(get_current_admin)):
+def get_registrations(admin=Depends(get_current_admin)):
     """Fetch all users currently in 'pending' status."""
     from app import db
     query = "SELECT username, department, status FROM hpe_users WHERE status = 'pending'"
@@ -377,7 +388,7 @@ _REGION_IP = {
 
 
 @router.post("/registrations/{username}/approve")
-async def approve_registration(username: str, approval: RegistrationApproval, admin=Depends(get_current_admin)):
+def approve_registration(username: str, approval: RegistrationApproval, admin=Depends(get_current_admin)):
     """
     Approve a pending registration and fully provision the user as a member of
     their department: set the password, create their Vault secret, and assign a
@@ -416,6 +427,12 @@ async def approve_registration(username: str, approval: RegistrationApproval, ad
         except Exception as mail_err:
             logger.warning(f"Approval email failed for {username}: {mail_err}")
 
+        # Add to audit log
+        db.execute_query(
+            "INSERT INTO hpe_admin_audit_log (admin_username, action, target_id, details) VALUES (%s, %s, %s, %s)",
+            (admin_username, "approve_registration", username, f"Provisioned as {profile.get('role')} in {department}")
+        )
+
         logger.info(
             f"[ADMIN] Registration approved by {admin_username} — {username} provisioned as "
             f"{profile.get('role')} in {department} (region={home_region})"
@@ -434,12 +451,19 @@ async def approve_registration(username: str, approval: RegistrationApproval, ad
 
 
 @router.post("/registrations/{username}/reject")
-async def reject_registration(username: str, admin=Depends(get_current_admin)):
+def reject_registration(username: str, admin=Depends(get_current_admin)):
     """Reject and delete a pending user registration."""
     from app import db
     admin_username = admin.get('sub', 'unknown')
     try:
         db.execute_query("DELETE FROM hpe_users WHERE username = %s AND status = 'pending'", (username,))
+        
+        # Add to audit log
+        db.execute_query(
+            "INSERT INTO hpe_admin_audit_log (admin_username, action, target_id, details) VALUES (%s, %s, %s, %s)",
+            (admin_username, "reject_registration", username, "Registration rejected and deleted")
+        )
+        
         logger.info(f"[ADMIN] Registration rejected by {admin_username} for user: {username}")
         return {"success": True, "message": f"Registration for {username} rejected."}
     except Exception as e:
@@ -448,7 +472,7 @@ async def reject_registration(username: str, admin=Depends(get_current_admin)):
 
 
 @router.post("/reset/request")
-async def request_reset(admin=Depends(get_current_admin)):
+def request_reset(admin=Depends(get_current_admin)):
     """Step 1: Generate a one-time reset token (valid 60s)."""
     token = create_reset_token()
     logger.warning(f"[ADMIN] Reset requested by {admin.get('sub', 'unknown')} — confirmation token issued (60s TTL)")
@@ -462,7 +486,7 @@ class ResetConfirmRequest(BaseModel):
     confirm_token: str
 
 @router.post("/reset/confirm")
-async def confirm_reset(request: ResetConfirmRequest, admin=Depends(get_current_admin)):
+def confirm_reset(request: ResetConfirmRequest, admin=Depends(get_current_admin)):
     """Step 2: Execute reset only if token is valid and not expired."""
     if not validate_reset_token(request.confirm_token):
         raise HTTPException(400, "Invalid or expired reset token. Request a new one.")
@@ -541,21 +565,21 @@ async def admin_websocket(websocket: WebSocket, token: str = None):
         await websocket.close(code=4001, reason="Invalid token")
         return
 
-    await websocket.accept()
-    admin_manager.add(websocket)
-
-    stats = admin_store.get_stats()
-    stats["infra_rotation_count"] = vault_infra_client.get_infra_rotation_count()
-    await websocket.send_json({
-        "type": "admin_connected",
-        "data": stats,
-    })
-
     try:
+        await websocket.accept()
+        admin_manager.add(websocket)
+
+        stats = admin_store.get_stats()
+        stats["infra_rotation_count"] = vault_infra_client.get_infra_rotation_count()
+        await websocket.send_json({
+            "type": "admin_connected",
+            "data": stats,
+        })
+
         while True:
             data = await websocket.receive_text()
     except WebSocketDisconnect:
         admin_manager.remove(websocket)
     except Exception as e:
+        logger.error(f"WebSocket error in admin route: {e}")
         admin_manager.remove(websocket)
-        logger.error(f"Admin WebSocket error: {e}")

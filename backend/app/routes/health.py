@@ -16,7 +16,7 @@ _start_time = time.time()
 
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check():
+def health_check():
     """Check health of all pipeline components."""
     metrics = get_metrics()
     return HealthResponse(
@@ -37,7 +37,7 @@ async def health_check():
 
 
 @router.get("/metrics", response_model=MetricsResponse)
-async def get_pipeline_metrics():
+def get_pipeline_metrics():
     """Get detailed pipeline metrics."""
     metrics = get_metrics()
     redis_up = redis_client.is_available()
@@ -72,13 +72,13 @@ async def get_pipeline_metrics():
 
 
 @router.get("/vault/credentials")
-async def get_vault_credentials():
+def get_vault_credentials():
     """Get current Vault credentials (masked) for frontend display."""
     return vault_client.get_visible_credentials()
 
 
 @router.get("/vault/users")
-async def get_all_vault_users(role: str = None, region: str = None):
+def get_all_vault_users(role: str = None, region: str = None):
     """
     Get masked credentials for ALL 200 users stored in Vault.
     Optional query params: ?role=Developer&region=US-East
@@ -103,19 +103,19 @@ async def get_all_vault_users(role: str = None, region: str = None):
 
 
 @router.get("/vault/users/{user_id}")
-async def get_vault_user(user_id: str):
+def get_vault_user(user_id: str):
     """Get masked credentials for a specific user from Vault."""
     return vault_client.get_user_credentials(user_id)
 
 
 @router.get("/kafka/stats")
 async def get_kafka_stats():
-    """Get real Kafka topic metadata, partition offsets"""
+    """Get real Kafka topic metadata, partition offsets, and consumer group lag."""
     return kafka_client.get_topic_stats()
 
 
 @router.get("/elasticsearch/recent-threats")
-async def get_recent_threats(size: int = 20):
+def get_recent_threats(size: int = 20):
     """Fetch recent threat detections from Elasticsearch."""
     threats = elastic_client.search_recent_threats(size=size)
     return {
@@ -125,7 +125,7 @@ async def get_recent_threats(size: int = 20):
 
 
 @router.get("/elasticsearch/stats")
-async def get_es_stats():
+def get_es_stats():
     """Get aggregated threat statistics from Elasticsearch."""
     stats = elastic_client.get_threat_stats()
     # Also get index document counts
