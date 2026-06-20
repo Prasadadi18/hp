@@ -15,6 +15,7 @@ from app import db
 from app import vault_client
 from app.schemas import NetworkEvent, PredictionResult
 from app.threat_engine import process_event
+from app.config import PORTAL_ONLY_MODE
 
 logger = logging.getLogger("hpe.auth")
 router = APIRouter()
@@ -414,11 +415,15 @@ def login(request: LoginRequest, http_req: Request):
                 cache_user(request.username, user)
 
         if not user:
+            if not PORTAL_ONLY_MODE:
+                write_zeek_log(request.username, False, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=False)
             raise HTTPException(status_code=401, detail="Invalid username or password")
 
         if user.get('status') == 'pending':
+            if not PORTAL_ONLY_MODE:
+                write_zeek_log(request.username, False, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=False)
             raise HTTPException(status_code=403, detail="Account awaiting admin approval")
@@ -502,6 +507,9 @@ def login(request: LoginRequest, http_req: Request):
                 except Exception as rot_err:
                     logger.error(f"Brute-force rotation failed for {request.username}: {rot_err}")
 
+            if not PORTAL_ONLY_MODE:
+                write_zeek_log(request.username, True, client_ip, is_vpn)
+
             return {
                 "success": True,
                 "message": "Login successful",
@@ -535,6 +543,8 @@ def login(request: LoginRequest, http_req: Request):
                 db.execute_query("UPDATE hpe_users SET failed_attempts = failed_attempts + 1 WHERE username = %s", (request.username,))
             # Invalidate cache — failed_attempts counter has changed
             invalidate_user_cache(request.username)
+            if not PORTAL_ONLY_MODE:
+                write_zeek_log(request.username, False, client_ip, is_vpn)
             if is_vpn:
                 _broadcast_vpn_alert(request.username, client_ip, vpn_info, login_success=False)
             raise HTTPException(status_code=401, detail="Invalid username or password")
@@ -732,9 +742,11 @@ def simulate(request: SimulateRequest, http_req: Request):
         # 5. Process event directly through threat engine (forcing rotation on BLOCK/CRITICAL)
         result = process_event(event, force_rotation=True)
         
-        # 6. Skip Zeek log — the direct WS broadcast below is the authoritative
-        #    source for pipeline visibility. Writing a Zeek log here would cause
-        #    Filebeat/Kafka to reprocess the event and produce a duplicate entry.
+        # 6. Write Zeek log for Filebeat/Kafka pipeline (full-stack mode only).
+        #    In portal-only mode the direct WS broadcast below is the sole source.
+        if not PORTAL_ONLY_MODE:
+            write_zeek_log(request.username, True, client_ip, is_vpn)
+
 
         # 7. Add credentials rotated flags to output
         result_data = result.model_dump()

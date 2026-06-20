@@ -14,7 +14,7 @@ from pathlib import Path
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from app.config import TEST_EVENTS_PATH
+from app.config import TEST_EVENTS_PATH, PORTAL_ONLY_MODE
 from app.schemas import NetworkEvent
 from app.threat_engine import process_event
 from app import kafka_client
@@ -112,15 +112,26 @@ async def simulate_stream(websocket: WebSocket):
     # the dashboard. Returning here would close the WS, drop the client from
     # ws_manager, and trigger the frontend's local-simulation fallback.
     if total == 0:
-        try:
-            while True:
-                await websocket.receive_text()
-        except WebSocketDisconnect:
-            ws_manager.remove(websocket)
-        except Exception as e:
-            ws_manager.remove(websocket)
-            logger.error(f"Simulate WS (portal-only keep-alive) error: {e}")
-        return
+        if PORTAL_ONLY_MODE:
+            # Portal-only mode: no synthetic dataset to stream. Keep the connection
+            # OPEN and registered so REAL events broadcast via ws_manager (portal
+            # logins/simulations from auth.py) are delivered to the dashboard.
+            try:
+                while True:
+                    await websocket.receive_text()
+            except WebSocketDisconnect:
+                ws_manager.remove(websocket)
+            except Exception as e:
+                ws_manager.remove(websocket)
+                logger.error(f"Simulate WS (portal-only keep-alive) error: {e}")
+            return
+        else:
+            # Full-stack mode: report error and close
+            await websocket.send_json({
+                "type": "error",
+                "data": {"message": "No test events loaded"},
+            })
+            return
 
     try:
         # Loop continuously through events

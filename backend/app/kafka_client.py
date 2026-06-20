@@ -478,6 +478,11 @@ def _consumer_loop(process_callback, loop, result_queue):
                     loop
                 )
 
+            # Throttle: cap dashboard event rate to ~1 event per 2.5s
+            # Without this, backlogged Kafka events flood the UI at 5-8/sec.
+            import time as _time
+            _time.sleep(2.5)
+
         except Exception as e:
             logger.error(f"Consumer loop error: {e}")
 
