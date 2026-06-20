@@ -259,6 +259,10 @@ services:
   ngrok:
     image: ngrok/ngrok:latest
     container_name: hpe-ngrok
+    # restart: on the fast down->up mode switch, the cloud endpoint can still be
+    # marked "online" from the previous session (ERR_NGROK_334). Keep retrying
+    # until ngrok releases the reserved domain, then this comes up on its own.
+    restart: unless-stopped
     volumes:
       - ./ngrok.yml:/etc/ngrok.yml:ro
     command:

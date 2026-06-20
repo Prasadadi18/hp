@@ -108,12 +108,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, code: int, payload: dict):
         body = json.dumps(payload).encode()
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self._cors()
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self._cors()
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            # Browser closed the poll connection mid-response (normal on page
+            # refresh/navigation). Nothing to send to; drop it quietly.
+            pass
 
     def do_OPTIONS(self):
         self.send_response(204)
