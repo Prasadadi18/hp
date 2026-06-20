@@ -63,8 +63,9 @@ if ($DeleteFirst) {
 }
 
 # ── Phase 1: Docker ─────────────────────────────────────────────────────────
-Write-Step "1" "Pointing Docker at Minikube"
-& minikube docker-env | Invoke-Expression
+Write-Step "1" "Configuring Docker for Multi-Node"
+# minikube docker-env is incompatible with multi-node clusters
+# We will build locally and load the images into the minikube nodes
 
 # ── Phase 2: Build images ───────────────────────────────────────────────────
 if (-not $SkipBuild) {
@@ -75,6 +76,18 @@ if (-not $SkipBuild) {
     Write-Step "2b" "Building frontend image"
     docker build -t hpe-frontend:latest -f frontend/Dockerfile ./frontend
     if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: frontend build failed" -ForegroundColor Red; exit 1 }
+
+    Write-Step "2c" "Building login portal image"
+    docker build -t hpe-login-portal:latest -f public-login/Dockerfile ./public-login
+    if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: login portal build failed" -ForegroundColor Red; exit 1 }
+
+    Write-Step "2d" "Loading images to Minikube nodes"
+    Write-Host "  Loading hpe-backend:latest..." -ForegroundColor DarkYellow
+    minikube image load hpe-backend:latest
+    Write-Host "  Loading hpe-frontend:latest..." -ForegroundColor DarkYellow
+    minikube image load hpe-frontend:latest
+    Write-Host "  Loading hpe-login-portal:latest..." -ForegroundColor DarkYellow
+    minikube image load hpe-login-portal:latest
 } else {
     Write-Step "2" "Skipping image builds (--SkipBuild)"
 }
