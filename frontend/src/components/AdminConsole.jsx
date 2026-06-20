@@ -44,7 +44,6 @@ export default function AdminConsole({
   // Filter states
   const [statusFilter, setStatusFilter] = useState('pending');
   const [severityFilter, setSeverityFilter] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('');
 
   const handleLogout = useCallback(() => {
     console.log('[ADMIN] Logging out and clearing credentials');
@@ -287,6 +286,7 @@ export default function AdminConsole({
       if (data.success) {
         onShowToast('✅ User Approved', `${username} is now active with the provided credentials.`);
         loadRegistrations();
+        loadAuditLog();
       } else {
         onShowToast('❌ Error', data.message || 'Failed to approve registration');
       }
@@ -309,8 +309,9 @@ export default function AdminConsole({
       if (!res) return;
       const data = await res.json();
       if (data.success) {
-        onShowToast('❌ User Rejected', `Registration for ${username} deleted.`);
+        onShowToast('🗑️ User Rejected', `Registration for ${username} deleted.`);
         loadRegistrations();
+        loadAuditLog();
       } else {
         onShowToast('❌ Error', data.message || 'Failed to reject registration');
       }
@@ -451,13 +452,67 @@ export default function AdminConsole({
     );
   }
 
-  // Filter alerts locally by source filter if needed
-  const filteredAlerts = sourceFilter
-    ? alerts.filter(a => {
-        const src = a.event_data?.event_source || 'replayed_dataset';
-        return src === sourceFilter;
-      })
-    : alerts;
+  // Helper to render individual alert cards
+  const renderAlertCard = (alert, selectedAlertId, selectAlert) => {
+    const isCritical = alert.threat_action === 'CRITICAL_ALERT';
+    const isBlock = alert.threat_action === 'BLOCK';
+    const severityClass = isCritical ? 'severity-critical' : isBlock ? 'severity-high' : 'severity-medium';
+    const statusClass = alert.status === 'pending' ? 'status-pending'
+      : alert.status === 'approved' ? 'status-approved' : 'status-rejected';
+    const isSelected = alert.alert_id === selectedAlertId;
+
+    const scorePercent = ((alert.threat_score || 0) * 100).toFixed(1);
+    const timeStr = alert.created_at ? new Date(alert.created_at).toLocaleTimeString() : '--';
+
+    const src = alert.event_data?.event_source || 'replayed_dataset';
+    const isLive = src !== 'replayed_dataset';
+    const sourceBadgeHtml = isLive
+      ? <span className="badge-live" style={{ marginLeft: '8px', background: 'rgba(0,255,180,0.15)', color: '#00ffb4', border: '1px solid #00ffb4', borderRadius: '4px', padding: '1px 6px', fontSize: '10px', fontWeight: 700 }}>🌐 LIVE PORTAL</span>
+      : <span className="badge-replayed" style={{ marginLeft: '8px', background: 'rgba(100,160,255,0.12)', color: '#64a0ff', border: '1px solid #64a0ff', borderRadius: '4px', padding: '1px 6px', fontSize: '10px', fontWeight: 700 }}>📊 REPLAYED</span>;
+
+    return (
+      <div
+        key={alert.alert_id}
+        className={`admin-alert-card ${severityClass} ${statusClass} ${isSelected ? 'selected' : ''}`}
+        onClick={() => selectAlert(alert.alert_id)}
+      >
+        <div className="admin-alert-card-header">
+          <span className={`admin-severity-badge ${severityClass}`}>
+            {isCritical ? '🔴 CRITICAL' : isBlock ? '🟠 BLOCK' : '🟡 MONITOR'}
+          </span>
+          {sourceBadgeHtml}
+          <span className={`admin-alert-status ${statusClass}`}>
+            {alert.status.toUpperCase()}
+          </span>
+        </div>
+        <div className="admin-alert-card-body">
+          <div className="admin-alert-user">{alert.user_id || 'unknown'}</div>
+          <div className="admin-alert-meta">
+            <span>Score: <strong>{scorePercent}%</strong></span>
+            <span>IP: {alert.event_data?.source_ip || '--'}</span>
+            <span>{timeStr}</span>
+          </div>
+          <div className="admin-alert-type">{alert.event_data?.anomaly_type || 'Unknown'}</div>
+        </div>
+        <div className="admin-alert-id">{alert.alert_id}</div>
+      </div>
+    );
+  };
+
+  // Filter alerts locally by status and severity
+  const filteredAlerts = alerts.filter(a => {
+    if (statusFilter && a.status !== statusFilter) return false;
+    if (severityFilter) {
+      const isCritical = a.threat_action === 'CRITICAL_ALERT';
+      const isBlock = a.threat_action === 'BLOCK';
+      const severity = isCritical ? 'critical' : isBlock ? 'high' : 'medium';
+      if (severity !== severityFilter) return false;
+    }
+    return true;
+  });
+
+  const livePortalAlerts = filteredAlerts.filter(a => (a.event_data?.event_source || 'replayed_dataset') !== 'replayed_dataset');
+  const replayedAlerts = filteredAlerts.filter(a => (a.event_data?.event_source || 'replayed_dataset') === 'replayed_dataset');
 
   return (
     <section className="section active" id="admin-section">
@@ -519,15 +574,6 @@ export default function AdminConsole({
             <span className="admin-panel-title">🔔 Alert Queue</span>
             <div className="admin-filter-row">
               <select
-                value={sourceFilter}
-                onChange={e => setSourceFilter(e.target.value)}
-                className="admin-filter-select"
-              >
-                <option value="">All Sources</option>
-                <option value="live_portal">🌐 Live Portal</option>
-                <option value="replayed_dataset">📊 Replayed Dataset</option>
-              </select>
-              <select
                 value={statusFilter}
                 onChange={e => setStatusFilter(e.target.value)}
                 className="admin-filter-select"
@@ -550,53 +596,61 @@ export default function AdminConsole({
             </div>
           </div>
           <div className="admin-alert-list">
-            {filteredAlerts.length === 0 ? (
-              <div className="admin-empty">No alerts match current filters</div>
+            {/* ── Live Portal Alerts Section ── */}
+            <div style={{
+              padding: '10px 14px',
+              background: 'linear-gradient(90deg, rgba(0,255,180,0.08) 0%, rgba(0,0,0,0) 100%)',
+              borderBottom: '2px solid rgba(0,255,180,0.35)',
+              borderLeft: '3px solid #00ffb4',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '12px',
+              color: '#00ffb4',
+              fontWeight: 'bold',
+              textTransform: 'uppercase',
+              letterSpacing: '1px',
+            }}>
+              🌐 Live Portal Alerts
+              <span style={{ marginLeft: 'auto', background: 'rgba(0,255,180,0.15)', border: '1px solid #00ffb4', borderRadius: '10px', padding: '1px 8px', fontSize: '11px' }}>
+                {livePortalAlerts.length}
+              </span>
+            </div>
+            {livePortalAlerts.length === 0 ? (
+              <div className="admin-empty" style={{ padding: '16px', fontSize: '13px', color: 'rgba(0,255,180,0.5)', borderLeft: '3px solid rgba(0,255,180,0.15)' }}>
+                No live portal alerts — trigger a login or VPN simulation to see events here
+              </div>
             ) : (
-              filteredAlerts.map(alert => {
-                const isCritical = alert.threat_action === 'CRITICAL_ALERT';
-                const isBlock = alert.threat_action === 'BLOCK';
-                const severityClass = isCritical ? 'severity-critical' : isBlock ? 'severity-high' : 'severity-medium';
-                const statusClass = alert.status === 'pending' ? 'status-pending'
-                  : alert.status === 'approved' ? 'status-approved' : 'status-rejected';
-                const isSelected = alert.alert_id === selectedAlertId;
+              livePortalAlerts.map(alert => renderAlertCard(alert, selectedAlertId, selectAlert))
+            )}
 
-                const scorePercent = ((alert.threat_score || 0) * 100).toFixed(1);
-                const timeStr = alert.created_at ? new Date(alert.created_at).toLocaleTimeString() : '--';
-
-                const src = alert.event_data?.event_source || 'replayed_dataset';
-                const sourceBadgeHtml = src === 'live_portal'
-                  ? <span className="badge-live" style={{ marginLeft: '8px' }}>🌐 Live</span>
-                  : <span className="badge-replayed" style={{ marginLeft: '8px' }}>📊 Replayed</span>;
-
-                return (
-                  <div
-                    key={alert.alert_id}
-                    className={`admin-alert-card ${severityClass} ${statusClass} ${isSelected ? 'selected' : ''}`}
-                    onClick={() => selectAlert(alert.alert_id)}
-                  >
-                    <div className="admin-alert-card-header">
-                      <span className={`admin-severity-badge ${severityClass}`}>
-                        {isCritical ? '🔴 CRITICAL' : isBlock ? '🟠 BLOCK' : '🟡 MONITOR'}
-                      </span>
-                      {sourceBadgeHtml}
-                      <span className={`admin-alert-status ${statusClass}`}>
-                        {alert.status.toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="admin-alert-card-body">
-                      <div className="admin-alert-user">{alert.user_id || 'unknown'}</div>
-                      <div className="admin-alert-meta">
-                        <span>Score: <strong>{scorePercent}%</strong></span>
-                        <span>IP: {alert.event_data?.source_ip || '--'}</span>
-                        <span>{timeStr}</span>
-                      </div>
-                      <div className="admin-alert-type">{alert.event_data?.anomaly_type || 'Unknown'}</div>
-                    </div>
-                    <div className="admin-alert-id">{alert.alert_id}</div>
-                  </div>
-                );
-              })
+            {/* ── Replayed Dataset Alerts Section ── */}
+            <div style={{
+              padding: '10px 14px',
+              marginTop: '12px',
+              background: 'linear-gradient(90deg, rgba(100,160,255,0.08) 0%, rgba(0,0,0,0) 100%)',
+              borderBottom: '2px solid rgba(100,160,255,0.35)',
+              borderLeft: '3px solid #64a0ff',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '12px',
+              color: '#64a0ff',
+              fontWeight: 'bold',
+              textTransform: 'uppercase',
+              letterSpacing: '1px',
+            }}>
+              📊 Replayed Dataset Alerts
+              <span style={{ marginLeft: 'auto', background: 'rgba(100,160,255,0.15)', border: '1px solid #64a0ff', borderRadius: '10px', padding: '1px 8px', fontSize: '11px' }}>
+                {replayedAlerts.length}
+              </span>
+            </div>
+            {replayedAlerts.length === 0 ? (
+              <div className="admin-empty" style={{ padding: '16px', fontSize: '13px', color: 'rgba(100,160,255,0.5)', borderLeft: '3px solid rgba(100,160,255,0.15)' }}>
+                No replayed dataset alerts match filters
+              </div>
+            ) : (
+              replayedAlerts.map(alert => renderAlertCard(alert, selectedAlertId, selectAlert))
             )}
           </div>
         </div>
