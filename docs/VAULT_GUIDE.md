@@ -1,6 +1,6 @@
-# HashiCorp Vault — Credential System & Infrastructure Security
+# HashiCorp Vault — Credential Security Architecture
 
-> This document explains how the HPE pipeline manages credentials for 200 enterprise users via HashiCorp Vault, and covers the full credential security architecture including dynamic database secrets, AppRole authentication, and automated Kubernetes unsealing.
+> **Comprehensive credential management documentation.** This document explains the complete credential security architecture implemented in the AI-Based Network Monitoring and Anomaly Detection System, including HashiCorp Vault integration for user credential management, dynamic database secrets, AppRole authentication, and automated Kubernetes unsealing.
 
 ---
 
@@ -45,36 +45,60 @@ user_profiles.json (200 users)
 ### 1. Startup — Credential Seeding
 
 When the backend starts (`main.py` → `vault_client.connect_vault()`):
-1. Reads all 200 user profiles from `user_profiles.json`
-2. For each user, creates a Vault secret at `secret/hpe/users/{user_id}`
-3. Each secret contains:
-   - `db_password` — 32-char cryptographically secure password
-   - `api_key` — Prefixed with `hpe_` + 48 hex chars
+1. Authenticates to Vault using AppRole (reads `role_id` and `secret_id` from shared PVC)
+2. Reads all 200 user profiles from `user_profiles.json`
+3. For each user, creates a Vault secret at `secret/hpe/users/{user_id}`
+4. Each secret contains:
+   - `db_password` — 32-character cryptographically secure password
+   - `api_key` — Prefixed with `hpe_` + 48 hex characters
    - `service_token` — UUID v4
    - `role` — from profile (Developer, Admin, Finance, HR, Sales)
    - `home_region` — from profile (US-East, US-West, EU-Central, Asia-Pacific, South-America)
    - `rotation_count` — starts at 0
    - `status` — "active" initially
    - `last_rotation_reason` — "initial_provisioning"
+   - `created_at` — ISO timestamp
 
-### 2. Threat Detection — Per-User Rotation
+### 2. Threat Detection — Automated User Rotation
 
-When the AI engine detects a threat for a specific user:
+The system supports two credential rotation modes controlled by the `ENABLE_AUTO_USER_ROTATION` environment variable:
+
+**Production Mode** (`ENABLE_AUTO_USER_ROTATION=true`):
+- User credentials rotate **automatically** when AI engine detects BLOCK or CRITICAL threats
+- Rotation happens in milliseconds without admin approval
+- Admin still reviews and approves infrastructure rotation for CRITICAL alerts
+
+**Demo/Testing Mode** (`ENABLE_AUTO_USER_ROTATION=false`, default):
+- User credentials rotate **only after admin approval**
+- Allows repeated testing with same credentials
+- Better for demonstrations and development
+
+When rotation occurs:
 1. `threat_engine.py` calls `vault_client.rotate_credentials(user=event.user_id)`
 2. Only **that user's** credentials are regenerated
 3. The secret at `secret/hpe/users/{user_id}` is updated with:
    - Brand new `db_password`, `api_key`, `service_token`
    - Incremented `rotation_count`
    - `status` → "rotated"
-   - `last_rotation_reason` → `"threat_detected_score_0.XXXX"`
+   - `last_rotation_reason` → `"threat_detected_score_0.XXXX"` or `"admin_approved_..."`
+   - Updated `created_at` timestamp
+4. New credentials are emailed to the security admin via `soar_email.py`
 
-### 3. CRITICAL Alert — Dual Rotation
+### 3. CRITICAL Alert — Infrastructure Rotation
 
-When an admin approves a CRITICAL alert (score > 0.85), the system performs two simultaneous rotations:
-1. **User KV rotation** — the flagged user's credentials are regenerated as above
-2. **Infrastructure lease revocation** — `vault_infra_client.py` immediately revokes the active PostgreSQL dynamic credential lease, forcing Vault to issue a brand-new database user
+When an admin approves a CRITICAL alert (threat score > 0.85), the system performs infrastructure credential rotation based on the affected service:
 
-Both rotations are logged to the audit trail in PostgreSQL.
+**Database Rotation** (data_exfiltration, bulk_download, admin actions):
+1. `vault_infra_client.py` immediately revokes the active PostgreSQL dynamic credential lease
+2. Vault generates a brand-new database user with time-limited access
+3. Old database user ceases to exist within milliseconds
+
+**Kafka Rotation** (lateral_movement, privilege_escalation):
+1. `vault_infra_client.py` rotates Kafka credentials stored in Vault KV (`secret/hpe/kafka`)
+2. `kafka_client.reconnect_kafka()` fetches new credentials and rebuilds producer/consumer clients
+3. Zero downtime credential rotation with automatic reconnection
+
+Both rotations are logged to the audit trail in PostgreSQL with admin attribution.
 
 ### 4. API Access — Viewing Credentials
 
@@ -113,33 +137,48 @@ The backend authenticates to Vault using AppRole rather than a static token. On 
 
 ## Kafka Credentials
 
-Kafka broker credentials are stored in Vault KV at `secret/hpe/kafka` and fetched at backend startup via `vault_infra_client.py`. On a `lateral_movement` CRITICAL alert approval, `reconnect_kafka()` fetches the newly rotated credentials from Vault and rebuilds all Kafka producer/consumer clients instantly with zero downtime.
+Kafka broker credentials are stored in Vault KV at `secret/hpe/kafka` and fetched at backend startup via `vault_infra_client.py`. 
+
+**Rotation Process:**
+1. On `lateral_movement` or `privilege_escalation` CRITICAL alert approval
+2. `vault_infra_client.py` rotates the Kafka credentials in Vault KV
+3. `kafka_client.reconnect_kafka()` fetches the newly rotated credentials
+4. All Kafka producer/consumer clients are rebuilt with new credentials
+5. Zero downtime — reconnection happens automatically in the background
+
+This ensures that compromised Kafka credentials can be invalidated instantly while maintaining pipeline continuity.
 
 ---
 
 ## Auto-Unseal on Kubernetes Restart
 
-> **Why does Vault seal itself?**
-> Vault uses [Shamir's Secret Sharing](https://en.wikipedia.org/wiki/Shamir%27s_secret_sharing) as a security mechanism. Every time Vault's container restarts (e.g., after `minikube stop` → `minikube start`), Vault deliberately seals itself. This is **by design** — if someone gains physical access to the server, they cannot read any secrets without the unseal key.
+> **Why does Vault seal itself?**  
+> Vault uses [Shamir's Secret Sharing](https://en.wikipedia.org/wiki/Shamir%27s_secret_sharing) as a security mechanism. When Vault's container restarts (e.g., after `kubectl rollout restart` or cluster maintenance), Vault deliberately seals itself. This is **by design** — if someone gains physical access to the server, they cannot read secrets without the unseal key.
 
-Unsealing in Kubernetes is handled automatically. The Vault StatefulSet runs an `unseal-watcher` sidecar container alongside the main Vault server. The sidecar polls Vault's seal status every 15 seconds and automatically calls the unseal API whenever it detects Vault has sealed itself — no manual intervention required.
+**Automated Unsealing:**
+The Vault StatefulSet in Kubernetes includes an `unseal-watcher` sidecar container that automatically handles unsealing:
 
-The sidecar is secured with a minimal footprint:
-- Mounts the vault-data PVC as `readOnly: true` — it can only read the unseal key, never write
-- Has no Vault token and cannot read any secrets
-- Only calls `/v1/sys/unseal` — it cannot access or modify secret data
-- The Vault pod runs under a dedicated `vault-sa` ServiceAccount scoped with least-privilege RBAC
+**How It Works:**
+1. Sidecar polls Vault's seal status every 15 seconds
+2. When Vault is detected as sealed (after restart), it automatically calls the unseal API
+3. No manual intervention required — Vault becomes operational automatically
 
-**Watching the sidecar:**
+**Security Features:**
+- Sidecar mounts vault-data PVC as `readOnly: true` — can only read unseal key, never write
+- Has no Vault token and cannot read or modify secret data
+- Only has permission to call `/v1/sys/unseal` endpoint
+- Runs under dedicated `vault-sa` ServiceAccount with least-privilege RBAC
+
+**Monitoring:**
 ```bash
 # Follow unseal-watcher logs in real time
 kubectl logs vault-0 -c unseal-watcher -n hpe -f
 
-# Expected output after a Minikube restart:
+# Expected output after a restart:
 # [unseal-watcher] Vault is SEALED — attempting auto-unseal...
 # [unseal-watcher] Vault unsealed successfully.
 
-# Verify both containers are running in the vault pod
+# Verify both containers are running
 kubectl get pod vault-0 -n hpe -o jsonpath='{.status.containerStatuses[*].name}'
 # Output: vault unseal-watcher
 ```
@@ -172,9 +211,13 @@ kubectl get pod vault-0 -n hpe -o jsonpath='{.status.containerStatuses[*].name}'
 
 ## Security Notes
 
-- **Raft persistent storage:** Secrets survive container restarts. `docker-compose down -v` or `kubectl delete namespace hpe` wipes the PVC and resets Vault completely.
-- **Dynamic DB credentials:** No static database password exists anywhere. Vault creates and revokes PostgreSQL users automatically on each request and on CRITICAL alert approvals.
-- **AppRole authentication:** The root token is only used during `vault-init`. The running backend only ever holds a short-lived AppRole token that auto-renews every 45 minutes.
-- **Auto-unseal sidecar:** The unseal-watcher uses `readOnly: true` PVC access and carries no Vault token — it can only trigger the unseal API, not read any secrets.
-- **Masked API responses:** The `/api/vault/users` endpoint masks passwords (first 4 chars + `****` + last 4 chars). Full values are only visible in the Vault UI.
-- **KV v2:** We use Vault's KV v2 secrets engine, which provides versioning. You can see the full history of credential rotations for each user.
+- **Raft Persistent Storage:** Secrets survive container restarts. `docker-compose down -v` or `kubectl delete namespace hpe` wipes the PVC and resets Vault completely
+- **Dynamic DB Credentials:** No static database passwords exist. Vault creates and revokes PostgreSQL users automatically on each request and on CRITICAL alert approvals
+- **AppRole Authentication:** Root token only used during `vault-init`. Running backend only holds short-lived AppRole token that auto-renews every 45 minutes
+- **Auto-Unseal Sidecar:** Uses `readOnly: true` PVC access and carries no Vault token — can only trigger unseal API, not read secrets
+- **Masked API Responses:** `/api/vault/users` endpoint masks passwords (first 4 chars + `****` + last 4 chars). Full values only visible in Vault UI
+- **KV v2 Versioning:** Vault KV v2 secrets engine provides versioning — full history of credential rotations available for each user
+- **Email Notifications:** New credentials emailed to security admin via `soar_email.py` on rotation
+- **Redis Caching:** User profile and VPN lookup results cached in Redis for performance (L1: in-process dict, L2: shared Redis)
+- **JWT Admin Auth:** Admin console protected by JWT tokens stored in Vault at `hpe/admin-jwt`
+- **Audit Trail:** All admin actions logged to append-only `hpe_admin_audit_log` table with admin attribution

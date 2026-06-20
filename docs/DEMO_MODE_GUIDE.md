@@ -1,8 +1,13 @@
-# Demo Mode vs Production Mode
+# Demo Mode vs Production Mode — Automated Credential Rotation
 
 ## Overview
 
-The automated user credential rotation feature can be toggled between **Demo Mode** (for testing/presentations) and **Production Mode** (for real deployments) using the `ENABLE_AUTO_USER_ROTATION` environment variable.
+The AI-Based Network Monitoring and Anomaly Detection System supports two credential rotation modes to accommodate different deployment scenarios. The **automated user credential rotation** feature can be toggled between **Demo Mode** (for testing/presentations) and **Production Mode** (for real-world deployments) using the `ENABLE_AUTO_USER_ROTATION` environment variable.
+
+**Key Distinction:**
+- **Demo Mode:** User credentials rotate only after admin approval (easier testing and demonstrations)
+- **Production Mode:** User credentials rotate automatically on threat detection (enterprise security best practice)
+- **Infrastructure Rotation:** Always requires admin approval in both modes (database, Kafka credentials)
 
 ---
 
@@ -27,16 +32,16 @@ The automated user credential rotation feature can be toggled between **Demo Mod
 ```
 
 **Perfect for:**
-- Live demos where you need predictable credentials
-- Testing multiple scenarios with the same user
-- Training sessions
-- Development environments
+- Live demonstrations with predictable behavior
+- Multiple test scenarios with consistent credentials  
+- Training and educational sessions
+- Development and debugging environments
 
 ---
 
-## 🚀 Production Mode
+## 🚀 Production Mode (Enterprise Deployment)
 
-**When to use:** Production deployments, enterprise security operations
+**When to use:** Production deployments, real-world security operations, enterprise SOC environments
 
 **Setting:** `ENABLE_AUTO_USER_ROTATION=true`
 
@@ -61,11 +66,11 @@ The automated user credential rotation feature can be toggled between **Demo Mod
 
 ---
 
-## Configuration
+## Configuration Examples
 
 ### Docker Compose
 
-Edit `docker-compose.yml`:
+Edit `docker-compose.yml` or `docker-compose.portal.yml`:
 
 ```yaml
 backend:
@@ -79,6 +84,8 @@ backend:
 
 ### Environment Variable
 
+For local development or custom deployments:
+
 ```bash
 # Demo mode
 export ENABLE_AUTO_USER_ROTATION=false
@@ -87,10 +94,34 @@ export ENABLE_AUTO_USER_ROTATION=false
 export ENABLE_AUTO_USER_ROTATION=true
 ```
 
+### Kubernetes Deployment
+
+For Kubernetes deployments, update the backend ConfigMap:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: hpe
+data:
+  ENABLE_AUTO_USER_ROTATION: "false"  # Demo mode
+  # ENABLE_AUTO_USER_ROTATION: "true"   # Production mode
+```
+
+Then restart backend pods:
+```bash
+kubectl rollout restart deployment/backend -n hpe
+```
+
 ### Restart Application
 
 ```bash
+# Docker Compose
 docker-compose restart backend
+
+# Kubernetes
+kubectl rollout restart deployment/backend -n hpe
 ```
 
 ---
@@ -134,11 +165,7 @@ docker-compose restart backend
 # Start simulation
 curl -X POST http://localhost:8000/api/simulate/start
 
-# Check logs — should see "pending_admin_approval"
-docker logs hpe-backend | grep -i "user_rotation"
-
-# Approve alert in admin dashboard
-# NOW credentials rotate
+# Credentials await admin approval in admin dashboard
 ```
 
 ### Test Production Mode:
@@ -150,10 +177,7 @@ docker-compose restart backend
 # Start simulation
 curl -X POST http://localhost:8000/api/simulate/start
 
-# Check logs — should see "[AUTO-ROTATION]" immediately
-docker logs hpe-backend | grep "AUTO-ROTATION"
-
-# Credentials already rotated before admin sees the alert!
+# Credentials rotate automatically on threat detection
 ```
 
 ---
@@ -172,27 +196,3 @@ docker logs hpe-backend | grep "AUTO-ROTATION"
 [AUTO-ROTATION] User credentials rotated automatically for USR-0080 (threat=BLOCK, score=0.7842, success=True)
 [ADMIN] User credentials for USR-0080 were already rotated automatically at detection
 ```
-
----
-
-## Recommendation
-
-- **Use Demo Mode** for your internship presentation and testing
-- **Explain both modes** in your documentation (shows you understand production vs testing needs)
-- **Demonstrate the toggle** to show enterprise-ready design
-
----
-
-## Questions?
-
-**Q: Will this break my existing demos?**  
-A: No! Demo mode (default) preserves the original behavior where credentials rotate only after admin approval.
-
-**Q: Do I need to change anything in my code?**  
-A: No code changes needed. Just set the environment variable.
-
-**Q: What's the default if I don't set anything?**  
-A: Demo mode (ENABLE_AUTO_USER_ROTATION=false) — safe for testing!
-
-**Q: Can I switch between modes without rebuilding?**  
-A: Yes! Just change the environment variable and restart: `docker-compose restart backend`
