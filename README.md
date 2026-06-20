@@ -142,8 +142,10 @@ hpe/
 │   └── init/
 │       └── init-vault.sh       # Automated Vault initialization job (AppRole setup, DB engines)
 ├── scripts/                    # Utility Pipelines & Replay Engines
+│   ├── mode_switcher.py        # Host-side agent (port 9001) for the dashboard Live/Portal toggle
 │   ├── replay_live.py          # Synthetic dataset network live replay writer
 │   ├── es_to_kafka.py          # Elasticsearch to Kafka bridge script (watch-optimized)
+│   ├── generate_conn_log_from_test_events.py  # Build a conn.log from test_events.json (uid=event_id)
 │   └── generate_zeek_pcap.py   # Synthetic PCAP generation
 └── dataset/                    # Network Telemetry Training Logs
     ├── updated_realistic_network_logs.csv  # 100k+ network event records
@@ -332,6 +334,51 @@ docker compose --profile live-replay down --remove-orphans
 > docker compose restart backend login-portal
 > ```
 
+
+---
+
+### Switching Modes Live from the Dashboard (Mode Switcher) 🔀
+
+The dashboard header has a **MODE** toggle (**Live Replay** / **Portal**) that switches the
+whole stack between the two compose files without touching a terminal. Because a switch tears
+the stack **down** and brings the other **up** — including the backend and frontend — the
+switch logic cannot live inside the stack. It runs as a small **host-side agent**,
+`scripts/mode_switcher.py`, on port **9001**.
+
+**Run the agent on the host (leave it running; the dashboard button calls it):**
+```bash
+python scripts/mode_switcher.py
+```
+
+* `GET  /status`        → `{"mode": "live-replay" | "portal" | "stopped", "busy": bool}`
+* `POST /switch/live`   → `down` portal, `up` the live stack (fast, no rebuild)
+* `POST /switch/portal` → `down` live, `up` the portal stack (fast, no rebuild)
+* `POST /rebuild/live` · `/rebuild/portal` → same, but with `--build` (use after code changes)
+
+Notes:
+* A switch uses a plain `up -d` (no `--build`) so it's a fast restart — rebuilding on every
+  switch corrupted the BuildKit snapshot cache. Use the `/rebuild/*` routes only when you've
+  changed code.
+* Mode is detected from running containers via `hpe-es-to-kafka` (live-only).
+* Run **one** instance — a second copy fails to bind port 9001 (`address already in use`).
+
+#### What each mode feeds the dashboard
+
+| Mode | Event feed | Dashboard shows |
+|------|-----------|-----------------|
+| **Live Replay** | The **Simulate WebSocket** streams the labelled `test_events.json` into Kafka (~2/sec) | Real user IDs (`USR-XXXX`) + varied, model-driven anomaly scores |
+| **Portal** | Quiet — only real portal logins / Threat-Simulation clicks (`PORTAL_ONLY_MODE=true`, no synthetic stream) | Nothing until a user acts |
+
+The synthetic events that drive Live Replay are produced by a **single shared producer**
+(one per backend, regardless of how many dashboards/tabs are open), and the Kafka consumer
+**seeks to the latest offset** on connect so a restart/switch shows current events instead of
+replaying stale backlog.
+
+> **Raw Zeek/pcap path is opt-in.** The `zeek`, `filebeat`, `replay`, and `filebeat-live`
+> services are gated behind the `live-replay` compose **profile** and are **off by default**.
+> Their Zeek-generated events have no user identity (they render as `unknown / connection`
+> with a constant score), so the labelled Simulate stream is the default Live-Replay feed.
+> Enable the raw stream explicitly with `docker compose --profile live-replay up -d`.
 
 ---
 

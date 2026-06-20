@@ -78,6 +78,12 @@ services:
       - elasticsearch
     networks:
       - hpe-network
+    # Gated: the pcap→Zeek path emits identity-less events that flood the
+    # pipeline with "unknown / 30.3%". Default feed is the Simulate WebSocket
+    # (labelled test_events). Enable with --profile live-replay only if you
+    # specifically want the raw Zeek stream.
+    profiles:
+      - live-replay
 
   # ── Filebeat (Elastic Beats) ──
   filebeat:
@@ -93,6 +99,10 @@ services:
     networks:
       - hpe-network
     command: filebeat -e -c /usr/share/filebeat/filebeat.yml --strict.perms=false
+    # Gated with zeek (ships its identity-less output). See note on the zeek
+    # service. Default feed is the Simulate WebSocket.
+    profiles:
+      - live-replay
 
   # ── Elasticsearch to Kafka bridge ──
   es-to-kafka:

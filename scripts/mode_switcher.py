@@ -14,16 +14,21 @@ USAGE (run once on the host, alongside Docker):
 
 ENDPOINTS (CORS-enabled, so the frontend on :5173 can call it):
     GET  /status          -> {"mode": "live-replay" | "portal" | "stopped", "busy": bool}
-    POST /switch/live     -> down portal, up live-replay (docker-compose.yml)
-    POST /switch/portal   -> down live-replay, up portal (docker-compose.portal.yml)
+    POST /switch/live     -> down portal, up live-replay   (fast, no rebuild)
+    POST /switch/portal   -> down live-replay, up portal    (fast, no rebuild)
+    POST /rebuild/live    -> same as /switch/live  but with --build
+    POST /rebuild/portal  -> same as /switch/portal but with --build
 
-The compose commands run in a background thread (detached from the HTTP request)
-and log to scripts/mode_switcher.log so the response returns immediately.
+A plain /switch is just a restart (images already built), so it's fast and avoids
+the BuildKit snapshot corruption that --build-on-every-switch caused. Use /rebuild
+only after changing code. The compose commands run in a background thread (detached
+from the HTTP request) and log to scripts/mode_switcher.log.
 """
 
 import json
 import subprocess
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -34,17 +39,9 @@ LOG_FILE = REPO_ROOT / "scripts" / "mode_switcher.log"
 COMPOSE_MAIN = "docker-compose.yml"            # live-replay (full stack)
 COMPOSE_PORTAL = "docker-compose.portal.yml"   # portal-only
 
-# Switch command sequences (down the other mode first, then up this one)
-SWITCH_CMDS = {
-    "live": [
-        ["docker", "compose", "-f", COMPOSE_PORTAL, "down"],
-        ["docker", "compose", "-f", COMPOSE_MAIN, "up", "-d", "--build"],
-    ],
-    "portal": [
-        ["docker", "compose", "-f", COMPOSE_MAIN, "down"],
-        ["docker", "compose", "-f", COMPOSE_PORTAL, "up", "-d", "--build"],
-    ],
-}
+# Compose file for each mode, and the OTHER file to tear down first.
+COMPOSE_FILE = {"live": COMPOSE_MAIN, "portal": COMPOSE_PORTAL}
+OTHER_FILE = {"live": COMPOSE_PORTAL, "portal": COMPOSE_MAIN}
 
 # Simple in-process state guard so two switches don't run at once.
 _busy_lock = threading.Lock()
@@ -62,14 +59,17 @@ def _log(msg: str) -> None:
 
 
 def current_mode() -> str:
-    """Detect mode from running containers. hpe-zeek only exists in live-replay."""
+    """Detect mode from running containers. Both compose files share
+    login-portal/ngrok, but only the live-replay (full) stack runs the
+    ES->Kafka bridge (hpe-es-to-kafka). We key on that instead of hpe-zeek,
+    which is now gated behind a profile and may not be running in live mode."""
     try:
         out = subprocess.run(
             ["docker", "ps", "--format", "{{.Names}}"],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=10,
         ).stdout
         names = set(out.split())
-        if "hpe-zeek" in names:
+        if "hpe-es-to-kafka" in names:
             return "live-replay"
         if "hpe-backend" in names:
             return "portal"
@@ -79,20 +79,54 @@ def current_mode() -> str:
         return "unknown"
 
 
-def _run_switch(mode: str) -> None:
-    """Run the down+up sequence for a mode. Executed in a background thread."""
+def _run_switch(mode: str, rebuild: bool = False) -> None:
+    """Down the other mode, then up this one. Executed in a background thread.
+
+    By default we do a plain `up -d` (no --build) — images are already built, so
+    a switch is just a fast restart. This avoids hammering the BuildKit snapshot
+    store on every switch (the "parent snapshot does not exist" corruption). Pass
+    rebuild=True (via /rebuild/*) only when the code actually changed.
+    """
     global _busy
     try:
-        for cmd in SWITCH_CMDS[mode]:
-            _log(f"running: {' '.join(cmd)}")
+        down_cmd = ["docker", "compose", "-f", OTHER_FILE[mode], "down"]
+        # NOTE: we deliberately do NOT enable the 'live-replay' compose profile.
+        # The Zeek replay stream (replay/filebeat-live) carries no user identity
+        # and floods the pipeline with unenrichable "unknown / 30.3%" events. The
+        # dashboard's Simulate WebSocket already streams the labelled
+        # test_events.json into Kafka (real users + varied scores), so live mode
+        # = core stack + Simulate feed. Plain up; portal has no profiles either.
+        up_cmd = ["docker", "compose", "-f", COMPOSE_FILE[mode], "up", "-d"]
+        if rebuild:
+            up_cmd.append("--build")
+
+        _log(f"running: {' '.join(down_cmd)}")
+        proc = subprocess.run(
+            down_cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=600,
+        )
+        if proc.returncode != 0:
+            _log(f"down failed ({proc.returncode}): {proc.stderr[-500:]}")
+        else:
+            _log(f"ok: {' '.join(down_cmd)}")
+
+        # Brief pause so the shared compose network is fully released before we
+        # recreate it — avoids the "network <id> not found" race on a fast up.
+        time.sleep(3)
+
+        # Bring the target stack up, retrying once on the transient network race.
+        for attempt in (1, 2):
+            suffix = f" (attempt {attempt})" if attempt > 1 else ""
+            _log(f"running: {' '.join(up_cmd)}{suffix}")
             proc = subprocess.run(
-                cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=1200,
+                up_cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=1200,
             )
-            if proc.returncode != 0:
-                _log(f"command failed ({proc.returncode}): {proc.stderr[-500:]}")
-            else:
-                _log(f"ok: {' '.join(cmd)}")
-        _log(f"switch to '{mode}' complete")
+            if proc.returncode == 0:
+                _log(f"ok: {' '.join(up_cmd)}")
+                break
+            _log(f"up failed ({proc.returncode}): {proc.stderr[-500:]}")
+            if attempt == 1:
+                time.sleep(5)
+        _log(f"switch to '{mode}'{' (rebuild)' if rebuild else ''} complete")
     except Exception as e:
         _log(f"switch to '{mode}' errored: {e}")
     finally:
@@ -134,10 +168,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         global _busy
         path = self.path.rstrip("/")
-        mode = {"/switch/live": "live", "/switch/portal": "portal"}.get(path)
-        if mode is None:
-            self._json(404, {"error": "unknown route", "try": ["/switch/live", "/switch/portal"]})
+        # (mode, rebuild) for each route. /switch/* is a fast restart (no build);
+        # /rebuild/* rebuilds images first — use only after changing code.
+        routes = {
+            "/switch/live": ("live", False),
+            "/switch/portal": ("portal", False),
+            "/rebuild/live": ("live", True),
+            "/rebuild/portal": ("portal", True),
+        }
+        entry = routes.get(path)
+        if entry is None:
+            self._json(404, {"error": "unknown route", "try": list(routes)})
             return
+        mode, rebuild = entry
 
         with _busy_lock:
             if _busy:
@@ -145,12 +188,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             _busy = True
 
-        threading.Thread(target=_run_switch, args=(mode,), daemon=True).start()
+        threading.Thread(target=_run_switch, args=(mode, rebuild), daemon=True).start()
         target = "live-replay (docker-compose.yml)" if mode == "live" else "portal (docker-compose.portal.yml)"
+        eta = "~1-3 min (rebuilding images)" if rebuild else "~30-90s"
         self._json(202, {
             "accepted": True,
             "switching_to": mode,
-            "message": f"Switching to {target}. The stack is restarting (~30-90s, longer with --build). "
+            "rebuild": rebuild,
+            "message": f"Switching to {target}. The stack is restarting ({eta}). "
                        f"The dashboard will reconnect once it's back.",
         })
 

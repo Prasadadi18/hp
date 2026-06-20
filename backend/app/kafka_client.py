@@ -454,8 +454,33 @@ def _consumer_loop(process_callback, loop, result_queue):
         logger.error("Consumer not initialized")
         return
 
-    _consumer.subscribe([KAFKA_RAW_EVENTS_TOPIC])
+    # Start at the LIVE edge. On every (re)connect — including after a mode
+    # switch, which restarts this backend — seek each assigned partition to its
+    # high watermark instead of resuming from the committed offset. Otherwise the
+    # consumer replays hours of stale, already-processed backlog (every event
+    # showing the un-enriched default score) before it ever reaches live traffic.
+    def _on_assign(consumer, partitions):
+        for tp in partitions:
+            try:
+                _lo, hi = consumer.get_watermark_offsets(tp, timeout=5)
+                if hi is not None and hi >= 0:
+                    tp.offset = hi
+            except Exception as e:
+                logger.warning(f"Could not seek {tp.topic}[{tp.partition}] to latest: {e}")
+        consumer.assign(partitions)
+        logger.info("Kafka consumer assigned at latest offset (backlog skipped)")
+
+    _consumer.subscribe([KAFKA_RAW_EVENTS_TOPIC], on_assign=_on_assign)
     logger.info(f"Subscribed to {KAFKA_RAW_EVENTS_TOPIC}")
+
+    import time as _time
+    # Throttle the DASHBOARD feed, not the consumer. We keep polling/consuming at
+    # full speed so the committed offset tracks the producer and never falls
+    # behind (the old code slept 2.5s per message → ~0.4 ev/s vs ~2 ev/s produced
+    # → permanent, ever-growing lag). The pipeline still processes every event;
+    # we just sample what we forward to the UI to ~1 event / 2.5s.
+    UI_MIN_INTERVAL = 2.5
+    last_emit = 0.0
 
     while _consumer_running:
         try:
@@ -473,15 +498,14 @@ def _consumer_loop(process_callback, loop, result_queue):
 
             result = process_callback(raw)
             if result:
-                asyncio.run_coroutine_threadsafe(
-                    result_queue.put(result),
-                    loop
-                )
-
-            # Throttle: cap dashboard event rate to ~1 event per 2.5s
-            # Without this, backlogged Kafka events flood the UI at 5-8/sec.
-            import time as _time
-            _time.sleep(2.5)
+                now = _time.monotonic()
+                if now - last_emit >= UI_MIN_INTERVAL:
+                    last_emit = now
+                    asyncio.run_coroutine_threadsafe(
+                        result_queue.put(result),
+                        loop
+                    )
+                # else: processed by the pipeline but sampled out of the UI feed
 
         except Exception as e:
             logger.error(f"Consumer loop error: {e}")
