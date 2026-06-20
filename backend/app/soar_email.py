@@ -227,11 +227,13 @@ def _send_email(
         html_body = _build_html(event_id, user, source_ip, threat_score, action, reasons, timestamp, new_password)
         msg.attach(MIMEText(html_body, "html"))
 
+        receiver_list = [r.strip() for r in config.SOAR_RECEIVER_EMAIL.split(',') if r.strip()]
+
         with smtplib.SMTP(config.SOAR_SMTP_HOST, config.SOAR_SMTP_PORT, timeout=10) as server:
             server.ehlo()
             server.starttls()
             server.login(config.SOAR_SENDER_EMAIL, config.SOAR_SENDER_PASSWORD)
-            server.sendmail(config.SOAR_SENDER_EMAIL, config.SOAR_RECEIVER_EMAIL, msg.as_string())
+            server.sendmail(config.SOAR_SENDER_EMAIL, receiver_list, msg.as_string())
 
         logger.info(
             f"[SOAR] Alert email sent → {config.SOAR_RECEIVER_EMAIL} | "
@@ -262,11 +264,13 @@ def _send_html_email(subject: str, html_body: str, receiver: str) -> None:
         msg["To"] = receiver
         msg.attach(MIMEText(html_body, "html"))
 
+        receiver_list = [r.strip() for r in receiver.split(',') if r.strip()]
+
         with smtplib.SMTP(config.SOAR_SMTP_HOST, config.SOAR_SMTP_PORT, timeout=15) as server:
             server.ehlo()
             server.starttls()
             server.login(config.SOAR_SENDER_EMAIL, config.SOAR_SENDER_PASSWORD)
-            server.sendmail(config.SOAR_SENDER_EMAIL, receiver, msg.as_string())
+            server.sendmail(config.SOAR_SENDER_EMAIL, receiver_list, msg.as_string())
 
         logger.info(f"[SOAR] Email sent → {receiver} | subject={subject!r}")
 
